@@ -1,0 +1,1 @@
+i18n.gettext('vchm', preset: 'glib')

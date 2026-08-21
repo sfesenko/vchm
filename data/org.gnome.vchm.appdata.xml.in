@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop">
+  <id>org.gnome.vchm</id>
+  <name>vCHM</name>
+  <summary>CHM File Viewer</summary>
+  <description>
+    <p>vCHM is a viewer for Microsoft Compiled HTML Help (.chm) files.</p>
+    <p>Features:</p>
+    <ul>
+      <li>Table of contents navigation</li>
+      <li>Full-text search</li>
+      <li>Index browsing</li>
+      <li>History and bookmarks</li>
+      <li>Font size adjustment</li>
+      <li>Print support</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">org.gnome.vchm.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://example.com/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+  <url type="homepage">https://github.com/***REMOVED***/vchm</url>
+  <url type="bugtracker">https://github.com/***REMOVED***/vchm/issues</url>
+  <project_license>MIT</project_license>
+  <categories>
+    <category>Office</category>
+    <category>Documentation</category>
+    <category>Viewer</category>
+  </categories>
+  <mimetypes>
+    <mimetype>application/x-chm</mimetype>
+    <mimetype>application/vnd.ms-htmlhelp</mimetype>
+  </mimetypes>
+  <keywords>
+    <keyword>chm</keyword>
+    <keyword>help</keyword>
+    <keyword>documentation</keyword>
+    <keyword>viewer</keyword>
+  </keywords>
+</component>

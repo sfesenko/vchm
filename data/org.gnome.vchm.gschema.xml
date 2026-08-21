@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema path="/org/gnome/vchm/" id="org.gnome.vchm" gettext-domain="vchm">
+    <key name="window-x" type="i">
+      <default>50</default>
+      <summary>Window X position</summary>
+    </key>
+    <key name="window-y" type="i">
+      <default>50</default>
+      <summary>Window Y position</summary>
+    </key>
+    <key name="window-width" type="i">
+      <default>1000</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>700</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized state</summary>
+    </key>
+    <key name="sash-position" type="i">
+      <default>250</default>
+      <summary>Sidebar sash position</summary>
+    </key>
+    <key name="show-topics" type="b">
+      <default>true</default>
+      <summary>Show topics panel</summary>
+    </key>
+    <key name="show-index" type="b">
+      <default>true</default>
+      <summary>Show index panel</summary>
+    </key>
+    <key name="show-search" type="b">
+      <default>false</default>
+      <summary>Show search panel</summary>
+    </key>
+    <key name="active-side-panel" type="i">
+      <default>0</default>
+      <summary>Active side panel (0=topics, 1=index, 2=search)</summary>
+    </key>
+    <key name="font-size" type="i">
+      <default>12</default>
+      <summary>Font size</summary>
+    </key>
+    <key name="font-family" type="s">
+      <default>'Sans'</default>
+      <summary>Font family</summary>
+    </key>
+    <key name="fixed-font-family" type="s">
+      <default>'Monospace'</default>
+      <summary>Fixed font family</summary>
+    </key>
+    <key name="show-images" type="b">
+      <default>true</default>
+      <summary>Show images in viewer</summary>
+    </key>
+    <key name="recent-files" type="as">
+      <default>[]</default>
+      <summary>Recent files list</summary>
+    </key>
+    <key name="last-opened-dir" type="s">
+      <default>''</default>
+      <summary>Last opened directory</summary>
+    </key>
+  </schema>
+</schemalist>

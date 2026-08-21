@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=vCHM
+GenericName=CHM Viewer
+Comment=View Microsoft Compiled HTML Help files
+Exec=vchm %F
+Icon=org.gnome.vchm
+Terminal=false
+Categories=Office;Documentation;Viewer;
+MimeType=application/x-chm;application/vnd.ms-htmlhelp;
+Keywords=chm;help;documentation;viewer;
+StartupNotify=true
