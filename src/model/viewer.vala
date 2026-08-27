@@ -13,7 +13,6 @@ namespace Vchm.Model {
         public int font_size { get; set; }
         public string font_family { get; set; }
         public string fixed_font_family { get; set; }
-        public bool show_images { get; set; }
         
         // HTML content loaded from CHM
         public string? pending_html { get; set; }
@@ -33,7 +32,6 @@ namespace Vchm.Model {
             font_size = 12;
             font_family = "Sans";
             fixed_font_family = "Monospace";
-            show_images = true;
             find_text = "";
             find_case_sensitive = false;
         }

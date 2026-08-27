@@ -36,6 +36,13 @@ namespace ChmLib {
     [CCode (cname = "chm_retrieve_object", cheader_filename = "chm_lib.h", extern = true)]
     public extern long chm_retrieve_object (File* h, UnitInfoStruct* ui, uint8* buf, ulong addr, long len);
 
+    [CCode (cname = "chm_enumerate", cheader_filename = "chm_lib.h", extern = true)]
+    public extern int chm_enumerate (File* h, int what, EnumerateCb cb, void* context);
+
+    // CHM_ENUMERATOR: int (*)(chmFile*, chmUnitInfo*, void*)
+    [CCode (has_target = false)]
+    public delegate int EnumerateCb (File* h, UnitInfoStruct* ui, void* context);
+
     // Constants from chm_lib.h
     public const int UNCOMPRESSED = 0;
     public const int COMPRESSED = 1;

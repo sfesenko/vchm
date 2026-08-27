@@ -115,6 +115,13 @@ namespace Elmish {
         // Creates the view and runs the optional initial command
         // (e.g. asynchronously load persisted state).
         public void start (Cmd<Message>? init_cmd = null) {
+            // Idempotent: GtkApplication can emit ::activate more than once
+            // (e.g. second launch hands off via command_line). Recreating the
+            // view would duplicate signal connections and URI-scheme handlers.
+            if (this.view != null) {
+                Cmd.exec (dispatch, init_cmd);
+                return;
+            }
             this.view = createView (dispatch, model);
             Cmd.exec (dispatch, init_cmd);
         }

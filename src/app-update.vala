@@ -2,17 +2,35 @@
 // Copyright (c) 2026 Sergii Fesenko
 
 using Vchm.Model;
+using GLib;
 
-// Helper to find first topic URL in the tree
-string? find_first_topic_url (TopicsItem item) {
-    if (item.url != null && item.url != "/" && item.url != "") {
-        return item.url;
+// Normalize a navigation target to a CHM-internal absolute path.
+// Handles ms-its:/mk@MSITStore cross-book links by stripping the archive
+// part, and ensures a leading '/'.
+string normalize_chm_target (string url) {
+    string u = url.strip ();
+
+    if (u.has_prefix ("ms-its:") || u.has_prefix ("mk:@MSITStore:") || u.has_prefix ("mk:MSITStore:")) {
+        // Form: ms-its:<archive>.chm/path/page.htm
+        int marker = u.index_of (".chm/");
+        if (marker >= 0) {
+            return u.substring (marker + 4);
+        }
+        marker = u.index_of ("::/");
+        if (marker >= 0) {
+            return u.substring (marker + 1);
+        }
+        return "/";
     }
-    foreach (var child in item.children) {
-        var url = find_first_topic_url (child);
-        if (url != null) return url;
+
+    if (u.has_prefix ("file://")) {
+        var unescaped = GLib.Uri.unescape_string (u, null);
+        if (unescaped != null) u = unescaped;
     }
-    return null;
+
+    if (u.length == 0) return "/";
+    if (u[0] != '/') return "/" + u;
+    return u;
 }
 
 public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
@@ -24,16 +42,32 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var open_msg = (OpenFileMessage) msg;
             var path = open_msg.path;
 
-            // Load CHM file asynchronously
+            // Heavy parse: run on a worker thread; dispatch marshals back.
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                var chm = new CHMFile ();
-                if (chm.load (path)) {
-                    var title = chm.title ();
-                    if (title == "") title = GLib.Path.get_basename (path);
-                    var home = chm.home_page ();
-                    dispatch (new OpenFileDoneMessage (path, title, home));
-                } else {
-                    dispatch (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                try {
+                    new GLib.Thread<void*> ("vchm-open", () => {
+                        // Each book owns its context (archive + panels).
+                        var ctx = new BookContext ();
+                        if (ctx.chm_file.load (path)) {
+                            Object? toc_model;
+                            ctx.chm_file.load_topics_tree (out toc_model);
+                            ctx.topics.build_from_chm (ctx.chm_file);
+                            ctx.index.build_from_chm (ctx.chm_file);
+                            ctx.chm_file.load_context_ids ();
+                            ctx.title = ctx.chm_file.title ();
+                            if (ctx.title == "")
+                                ctx.title = GLib.Path.get_basename (path);
+                            ctx.home = ctx.chm_file.home_page ();
+
+                            dispatch (new OpenFileDoneMessage (
+                                path, ctx.title, ctx.home, ctx));
+                        } else {
+                            dispatch (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                        }
+                        return null;
+                    });
+                } catch (GLib.Error e) {
+                    dispatch (new OpenFileFailedMessage (path, e.message));
                 }
             });
             break;
@@ -41,36 +75,49 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.OPEN_FILE_DONE: {
             var done_msg = (OpenFileDoneMessage) msg;
-            model.file_open = true;
-            // Use the existing chm_file instance to load the file
-            if (model.chm_file.load (done_msg.path)) {
-                Object dummy; model.chm_file.load_topics_tree (out dummy);
-                // Build topics tree
-                model.topics.build_from_chm (model.chm_file);
-                
-                // Build index
-                model.index.build_from_chm (model.chm_file);
-                
-                // Load context IDs
-                model.chm_file.load_context_ids ();
-                
-                // Navigate to home page (model state)
-                model.viewer.navigate (done_msg.home_page, done_msg.title, done_msg.path);
-                
-                // Dispatch NAVIGATE to actually load the content
-                model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title));
-                
-                // Add to history
-                model.history.add_entry (done_msg.title, done_msg.home_page, done_msg.path);
-                
-                // Add to recent files
-                model.settings.add_recent_file (done_msg.path);
-                
-                // Update last opened directory
-                model.settings.last_opened_dir = GLib.Path.get_dirname (done_msg.path);
-                
-                model.status_text = "Opened: %s".printf (GLib.Path.get_basename (done_msg.path));
+            if (done_msg.ctx == null) break;   // legacy safety
+
+            // Re-opening an already-open book: drop the freshly built
+            // duplicate context and keep pointing at the original. The
+            // view re-activates the existing tab either way — adding
+            // unconditionally leaked a chmlib handle + registry entry
+            // per reopen (review F6).
+            var ctx = done_msg.ctx;
+            BookContext? dup = null;
+            foreach (var b in model.books) {
+                if (b.chm_file.filename () == done_msg.path) { dup = b; break; }
             }
+            if (dup != null) {
+                ctx.chm_file.close ();
+                ctx.chm_file.re_register ();   // load() displaced our key
+                ctx = dup;
+            } else {
+                model.books.add (ctx);
+            }
+
+            model.active_book = ctx;
+
+            // Point the shared model at this book's containers.
+            model.chm_file = ctx.chm_file;
+            model.topics = ctx.topics;
+            model.index = ctx.index;
+            model.history = ctx.history;
+            model.file_open = true;
+
+            // Panels were built on the open worker; here we just wire state.
+            model.viewer.navigate (done_msg.home_page, done_msg.title, done_msg.path);
+
+            // Dispatch NAVIGATE to actually load the content
+            // DO NOT add to history here - NAVIGATE_DONE will handle it
+            model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title));
+            
+            // Add to recent files
+            model.settings.add_recent_file (done_msg.path);
+            
+            // Update last opened directory
+            model.settings.last_opened_dir = GLib.Path.get_dirname (done_msg.path);
+            
+            model.status_text = "Opened: %s".printf (GLib.Path.get_basename (done_msg.path));
             break;
         }
 
@@ -81,6 +128,14 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.CLOSE_FILE: {
+            // Close EVERY book: each BookContext owns a live chmlib handle
+            // and a registry entry — closing only the active one leaked the
+            // rest. Double-close is safe (CHMFile.close null-checks).
+            foreach (var ctx in model.books) {
+                ctx.chm_file.close ();
+            }
+            model.books.clear ();
+
             model.chm_file.close ();
             model.topics.clear ();
             model.index.clear ();
@@ -102,47 +157,83 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         // ── Navigation ──────────────────────────────────────────────────────
         case AppMessageKind.NAVIGATE: {
             var nav_msg = (NavigateMessage) msg;
-            stderr.printf ("DEBUG: NAVIGATE handler called for '%s', file_open=%b\n", nav_msg.url, model.file_open);
-            
+
             if (!model.file_open) break;
-            
-            // Skip CHM resolution for data: URIs and about:blank
-            if (nav_msg.url.has_prefix ("data:") || nav_msg.url == "about:blank") {
-                stderr.printf ("DEBUG: Skipping CHM resolution for %s\n", nav_msg.url);
+
+            // Skip non-CHM targets
+            if (nav_msg.url.has_prefix ("data:") || nav_msg.url == "about:blank" ||
+                nav_msg.url.has_prefix ("http://") || nav_msg.url.has_prefix ("https://")) {
                 break;
             }
-            
-            model.viewer.navigate (nav_msg.url, nav_msg.title ?? "", model.chm_file.filename ());
-            
-            // Load content asynchronously using new CHMContent API
+
+            // Track intended target: NAVIGATE_DONE prefers it for
+            // history entries and TOC selection sync.
+            // Replicates ViewerModel.navigate minus current_url: NAVIGATE_DONE
+            // owns that field — setting it here would make the queued view
+            // update fire a premature load_uri before fallback resolution.
+            model.viewer.intended_url = nav_msg.url;
+            model.viewer.current_title = nav_msg.title ?? "";
+            model.viewer.current_chm_file = model.chm_file.filename ();
+            model.viewer.loading = true;
+            model.viewer.error = null;
+            model.viewer.pending_html = null;
+
+            // Snapshot model state on the main thread before spawning the worker
+            // (the worker must not touch `model` — concurrent CLOSE/OPEN can
+            // mutate it).
+            var snap_file = model.chm_file;
+            var snap_cur = model.viewer.current_url;
+            var snap_url = nav_msg.url;
+            var snap_title = nav_msg.title ?? "";
+
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                stderr.printf ("DEBUG: Resolving object: '%s'\n", nav_msg.url);
-                
-                var content = model.chm_file.get_content (nav_msg.url);
-                
-                // If home page "/" resolves to empty, try to find first topic
-                if (!content.success && nav_msg.url == "/") {
-                    stderr.printf ("DEBUG: Home page '/' not found, trying first topic\n");
-                    
-                    // Get first topic URL from CHM file
-                    var first_url = model.chm_file.get_first_topic_url ();
-                    stderr.printf ("DEBUG: First topic URL from CHM: '%s'\n", first_url);
-                    
-                    if (first_url != null && first_url != "/") {
-                        content = model.chm_file.get_content (first_url);
-                        if (content.success) {
-                            nav_msg = new NavigateMessage (first_url, nav_msg.title ?? "");
-                            stderr.printf ("DEBUG: Using first topic URL: %s\n", first_url);
+                try {
+                new GLib.Thread<void*> ("vchm-nav", () => {
+                string target = normalize_chm_target (snap_url);
+
+                if (!snap_file.has_object (target)) {
+                    // Home page missing → fall back to the first TOC entry.
+                    if (target == "/") {
+                        var first_url = snap_file.get_first_topic_url ();
+                        if (first_url.length > 0 && snap_file.has_object (first_url)) {
+                            target = first_url;
+                        }
+                    }
+
+                    // Relative link that missed: resolve against the current
+                    // page's directory (e.g. /dir/page.htm + x.htm).
+                    if (!snap_file.has_object (target) && !target.has_prefix ("/ms-its")) {
+                        int last_slash = snap_cur.last_index_of ("/");
+                        if (last_slash > 0) {
+                            var joined = snap_cur.substring (0, last_slash + 1) + target.strip ().replace ("../", "");
+                            while (joined.contains ("/../")) {
+                                int up = joined.index_of ("/../");
+                                int prev = joined.last_index_of ("/", up - 1);
+                                if (prev < 0) break;
+                                joined = joined.substring (0, prev) + joined.substring (up + 3);
+                            }
+                            if (snap_file.has_object (joined)) {
+                                target = joined;
+                            }
                         }
                     }
                 }
-                
-                if (content.success) {
-                    // Store content in viewer model for the view to load
-                    model.viewer.pending_html = content.content;
-                    dispatch (new NavigateDoneMessage (nav_msg.url, nav_msg.title ?? ""));
-                } else {
-                    dispatch (new NavigateFailedMessage (nav_msg.url, content.error ?? "Page not found"));
+
+                // Dead link: every fallback missed — report failure instead
+                // of DONE (which loaded a blank page and polluted history).
+                if (!snap_file.has_object (target)) {
+                    dispatch (new NavigateFailedMessage (snap_url, "Page not found"));
+                    return null;
+                }
+
+                // The intended target rides along so a second navigation
+                // starting mid-flight cannot steal this one's history
+                // entry (review F7).
+                dispatch (new NavigateDoneMessage (target, snap_title, snap_url));
+                return null;
+                });
+                } catch (GLib.Error e) {
+                    dispatch (new NavigateFailedMessage (snap_url, e.message));
                 }
             });
             break;
@@ -153,37 +244,54 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.viewer.load_finished (true);
             model.viewer.current_url = done_msg.url;
             model.viewer.current_title = done_msg.title;
-            // Use intended_url for history (the CHM path), not the data: URI
-            var history_url = model.viewer.intended_url ?? done_msg.url;
-            model.history.add_entry (done_msg.title, history_url, model.chm_file.filename () ?? "");
+            // Use this navigation's own intended target for history (the
+            // CHM path), not the data: URI — and not the shared
+            // intended_url slot, which a newer in-flight navigation may
+            // already have overwritten (review F7).
+            var history_url = done_msg.intended_url;
+            model.viewer.intended_url = history_url;
+
+            if (model.history_navigation_in_progress) {
+                // Back/forward: the entry already exists in history; pushing
+                // again would truncate the forward tail (review §4.6).
+                model.history_navigation_in_progress = false;
+            } else {
+                model.history.add_entry (done_msg.title, history_url, model.chm_file.filename () ?? "");
+            }
+
             model.topics.selected_url = history_url;
             model.topics.expand_path (history_url);
-            model.status_text = done_msg.title;
+            model.status_text = done_msg.title != "" ? done_msg.title : done_msg.url;
             break;
         }
 
         case AppMessageKind.NAVIGATE_FAILED: {
             var fail_msg = (NavigateFailedMessage) msg;
             model.viewer.load_finished (false, fail_msg.error);
+            // Otherwise the stuck flag makes every later navigation skip
+            // its history push.
+            model.history_navigation_in_progress = false;
             model.show_toast ("Navigation failed: %s".printf (fail_msg.error));
             break;
         }
 
         case AppMessageKind.GO_BACK: {
-            
+            // A back/forward jump is still in flight; a second one would
+            // desync the history cursor.
+            if (model.history_navigation_in_progress) break;
             var entry = model.history.go_back ();
             if (entry != null) {
-                
+                model.history_navigation_in_progress = true;
                 model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title));
             }
             break;
         }
 
         case AppMessageKind.GO_FORWARD: {
-            
+            if (model.history_navigation_in_progress) break;
             var entry = model.history.go_forward ();
             if (entry != null) {
-                
+                model.history_navigation_in_progress = true;
                 model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title));
             }
             break;
@@ -209,19 +317,45 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         // ── Side panels ─────────────────────────────────────────────────────
+        // Toolbar/menu toggles are mutually exclusive:
+        // activating a panel shows the sidebar and selects it; toggling
+        // the active panel off hides the whole sidebar. The previous
+        // independent-flag version made every click a visual no-op
+        // (visibility was the OR of three flags).
         case AppMessageKind.TOGGLE_TOPICS_PANEL: {
-            model.settings.show_topics = !model.settings.show_topics;
+            if (model.settings.show_topics &&
+                model.settings.active_side_panel == 0) {
+                model.settings.show_topics = false;
+            } else {
+                model.settings.show_topics = true;
+                model.settings.show_index = false;
+                model.settings.show_search = false;
+                model.settings.active_side_panel = 0;
+            }
             break;
         }
 
         case AppMessageKind.TOGGLE_INDEX_PANEL: {
-            model.settings.show_index = !model.settings.show_index;
+            if (model.settings.show_index &&
+                model.settings.active_side_panel == 1) {
+                model.settings.show_index = false;
+            } else {
+                model.settings.show_topics = false;
+                model.settings.show_index = true;
+                model.settings.show_search = false;
+                model.settings.active_side_panel = 1;
+            }
             break;
         }
 
         case AppMessageKind.TOGGLE_SEARCH_PANEL: {
-            model.settings.show_search = !model.settings.show_search;
-            if (model.settings.show_search) {
+            if (model.settings.show_search &&
+                model.settings.active_side_panel == 2) {
+                model.settings.show_search = false;
+            } else {
+                model.settings.show_topics = false;
+                model.settings.show_index = false;
+                model.settings.show_search = true;
                 model.settings.active_side_panel = 2;
             }
             break;
@@ -286,7 +420,8 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                     break;
                 }
             }
-            if (index_msg.url != null) {
+            // Keyword-only rows carry url == "" — navigating would hit "/".
+            if (index_msg.url != null && index_msg.url.length > 0) {
                 model.get_parent_dispatch () (new NavigateMessage (index_msg.url));
             }
             break;
@@ -326,15 +461,26 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.SEARCH_EXECUTE: {
             if (model.file_open && model.search.query != "") {
                 model.search.searching = true;
+
+                // Snapshot query state and the archive on the main thread;
+                // the worker must not touch `model` (concurrent CLOSE_FILE
+                // can swap or close it mid-scan).
+                var snap_file = model.chm_file;
+                var q = model.search.query;
+                bool ww = model.search.whole_words;
+                bool to = model.search.titles_only;
+
                 cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                    Gee.HashMap<string, string> results;
-                    if (model.chm_file.search (model.search.query, model.search.whole_words, model.search.titles_only, out results)) {
-                        var list = new Gee.ArrayList<SearchResult> ();
-                        foreach (var entry in results) {
-                            list.add (new SearchResult (entry.key, entry.value, 1));
-                        }
-                        dispatch (new SearchDoneMessage (list));
-                    } else {
+                    // Full scan is expensive — run on a worker thread.
+                    // dispatch() marshals the result back to the main loop.
+                    try {
+                        new GLib.Thread<void*> ("vchm-search", () => {
+                            Gee.ArrayList<SearchResult> res;
+                            snap_file.search (q, ww, to, out res);
+                            dispatch (new SearchDoneMessage (res));
+                            return null;
+                        });
+                    } catch (GLib.Error e) {
                         dispatch (new SearchDoneMessage (new Gee.ArrayList<SearchResult> ()));
                     }
                 });
@@ -401,16 +547,19 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         // ── Viewer ───────────────────────────────────────────────────────────
         case AppMessageKind.VIEWER_FONT_INCREASE: {
             model.viewer.increase_font_size ();
+            model.settings.font_size = model.viewer.font_size;
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_DECREASE: {
             model.viewer.decrease_font_size ();
+            model.settings.font_size = model.viewer.font_size;
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_RESET: {
             model.viewer.reset_font_size ();
+            model.settings.font_size = model.viewer.font_size;
             break;
         }
 
@@ -419,32 +568,112 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.viewer.font_size = font_msg.size;
             model.viewer.font_family = font_msg.family;
             model.viewer.fixed_font_family = font_msg.fixed_family;
-            break;
-        }
-
-        case AppMessageKind.VIEWER_TOGGLE_IMAGES: {
-            model.viewer.show_images = !model.viewer.show_images;
+            model.settings.font_size = font_msg.size;
+            model.settings.font_family = font_msg.family;
+            model.settings.fixed_font_family = font_msg.fixed_family;
             break;
         }
 
         case AppMessageKind.VIEWER_FIND: {
+            // State only — ViewerView reacts through the FindController.
             var find_msg = (ViewerFindMessage) msg;
             model.viewer.find_text = find_msg.text;
-            // TODO: Implement find in WebKitGTK 6.0
+            model.viewer.find_case_sensitive = find_msg.case_sensitive;
             break;
         }
 
-        case AppMessageKind.VIEWER_FIND_NEXT: {
-            // TODO: Implement
+        case AppMessageKind.VIEWER_FIND_NEXT:
+        case AppMessageKind.VIEWER_FIND_PREV:
+        case AppMessageKind.VIEWER_PRINT:
+        case AppMessageKind.VIEWER_COPY:
+            // Pure view concerns; ViewerView.update drives them.
             break;
-        }
 
-        case AppMessageKind.VIEWER_FIND_PREV: {
-            // TODO: Implement
+        case AppMessageKind.VIEWER_FIND_COUNT:
+            // Handled by the shell view (match-counter label).
             break;
-        }
 
         // ── History ──────────────────────────────────────────────────────────
+        case AppMessageKind.BOOKMARK_ADD: {
+            var archive = model.chm_file.filename ();
+            if (!model.file_open || archive.length == 0) break;
+            model.bookmarks.add (archive,
+                                 model.viewer.current_title,
+                                 model.viewer.current_url);
+            model.settings.bookmark_rows = model.bookmarks.save ();
+            model.settings.save ();
+            model.show_toast (_("Bookmark added"));
+            model.get_parent_dispatch () (new BookmarksChangedMessage ());
+            break;
+        }
+
+        case AppMessageKind.BOOKMARK_REMOVE: {
+            var rm = (BookmarkRemoveMessage) msg;
+            var archive = model.chm_file.filename ();
+            if (!model.file_open || archive.length == 0) break;
+            model.bookmarks.remove (archive, rm.title);
+            model.settings.bookmark_rows = model.bookmarks.save ();
+            model.settings.save ();
+            model.get_parent_dispatch () (new BookmarksChangedMessage ());
+            break;
+        }
+
+        case AppMessageKind.BOOKMARK_JUMP: {
+            var jm = (BookmarkJumpMessage) msg;
+            if (jm.url.length > 0)
+                model.get_parent_dispatch () (new NavigateMessage (jm.url));
+            break;
+        }
+
+        case AppMessageKind.BOOKMARKS_CHANGED:
+            // Store already updated via settings; nothing to do here.
+            break;
+
+        case AppMessageKind.SET_ENCODING: {
+            var em = (SetEncodingMessage) msg;
+            if (!model.file_open) break;
+            var target = model.viewer.current_url;
+
+            // Metadata re-decode is fast; panel rebuild scans hundreds of
+            // pages — move that off the UI thread (pattern: OPEN_FILE).
+            model.chm_file.override_encoding (em.encoding);
+
+            // Snapshot on the main thread; the worker never touches `model`.
+            var snap_file = model.chm_file;
+            var snap_url = target;
+
+            cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
+                try {
+                    new GLib.Thread<void*> ("vchm-rebuild", () => {
+                        // Fresh containers: swap in whole instances instead
+                        // of mutating structures the UI may be reading.
+                        var topics = new TopicsModel ();
+                        var index = new IndexModel ();
+                        topics.build_from_chm (snap_file);
+                        index.build_from_chm (snap_file);
+                        dispatch (new PanelsRebuiltMessage (topics, index));
+                        return null;
+                    });
+                } catch (GLib.Error e) {
+                    dispatch (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel ()));
+                }
+            });
+
+            model.get_parent_dispatch () (new NavigateMessage (target,
+                                              model.chm_file.title ()));
+            model.show_toast (_("Encoding: %s").printf (
+                em.encoding == "auto" ? _("Automatic") : em.encoding));
+            break;
+        }
+
+        case AppMessageKind.PANELS_REBUILT: {
+            var rb_msg = (PanelsRebuiltMessage) msg;
+            if (!model.file_open) break;   // book closed mid-rebuild
+            model.topics = rb_msg.topics;
+            model.index = rb_msg.index;
+            break;
+        }
+
         case AppMessageKind.HISTORY_CLEAR: {
             model.history.clear ();
             break;
@@ -470,6 +699,11 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.APP_QUIT: {
             // Get window state for quit message
             model.get_parent_dispatch () (new QuitMessage (model.settings.window_width, model.settings.window_height, model.settings.window_maximized));
+            break;
+        }
+
+        case AppMessageKind.APP_QUIT_INTERNAL: {
+            // Actual quit - handled by view
             break;
         }
 

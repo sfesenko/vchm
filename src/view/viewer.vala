@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sergii Fesenko
+//
+// Page rendering via WebKit. Pages are loaded through the chm:// scheme so
+// WebKit resolves every relative URL (links, images, CSS, anchors)
+// natively against the page URI — no HTML rewriting involved.
 
 using WebKit;
 using Gtk;
@@ -11,149 +15,310 @@ namespace Vchm.View {
     public class ViewerView : WebView {
         private Elmish.Dispatch<AppMessage> dispatch;
         private WebViewContextMenu context_menu;
-        private string? pending_html = null;
+        private GLib.SimpleAction? open_external_action = null;
+        private string? loaded_url = null;
+        private string? loaded_book = null;
 
         public ViewerView () {
             Object (web_context: WebContext.get_default ());
-            // Connect to realize signal to load pending HTML when widget is realized
-            realize.connect (() => {
-                if (pending_html != null) {
-                    load_html (pending_html, "about:blank");
-                    pending_html = null;
-                }
-            });
         }
 
-        // Static reference to current model for URI scheme handler
-        private static AppModel? s_current_model = null;
+        private static bool s_scheme_registered = false;
+
+        // Which archive this tab renders (full path; set by the shell on
+        // creation). Full path instead of basename: two open books may
+        // share a basename and must not collide in the registry or URIs
+        // (review F5).
+        public string book_path { get; set; default = ""; }
 
         public void build_ui (Elmish.Dispatch<AppMessage> dispatch, AppModel model) {
             this.dispatch = dispatch;
-            s_current_model = model;
 
-            // Configure WebView settings
             var settings = get_settings ();
-            settings.enable_javascript = false; // CHM files typically don't need JS
+            settings.enable_javascript = false; // CHM files rarely need JS
             settings.enable_developer_extras = false;
             settings.enable_write_console_messages_to_stdout = false;
             settings.enable_page_cache = true;
             settings.default_font_size = model.viewer.font_size;
             settings.default_font_family = model.viewer.font_family;
             settings.monospace_font_family = model.viewer.fixed_font_family;
-            settings.auto_load_images = model.viewer.show_images;
+            // Images are always on; remote subresources are blocked by the
+            // CSP injected in on_chm_uri_request (see HtmlTextUtils).
+            settings.auto_load_images = true;
 
-            // Register chm:// URI scheme handler for images, CSS, JS
             var context = WebContext.get_default ();
-            context.register_uri_scheme ("chm", on_chm_uri_request);
+            if (!s_scheme_registered) {
+                context.register_uri_scheme ("chm", on_chm_uri_request);
+                s_scheme_registered = true;
+            }
 
-            // Handle navigation requests
             decide_policy.connect (on_decide_policy);
-
-            // Handle load changes
             load_changed.connect (on_load_changed);
 
-            // Context menu
+            open_external_action = new GLib.SimpleAction (
+                "open-external", GLib.VariantType.STRING);
+            open_external_action.activate.connect ((parameter) => {
+                if (parameter != null)
+                    open_external (parameter.get_string ());
+            });
+
+            var new_tab_action = new GLib.SimpleAction (
+                "open-new-tab", GLib.VariantType.STRING);
+            new_tab_action.activate.connect ((parameter) => {
+                if (parameter != null)
+                    dispatch (new OpenInNewTabMessage (parameter.get_string ()));
+            });
+
+            var group = new GLib.SimpleActionGroup ();
+            group.add_action (open_external_action);
+            group.add_action (new_tab_action);
+            insert_action_group ("viewer", group);
+
+            var find = get_find_controller ();
+            find.found_text.connect ((match_count) => {
+                dispatch (new ViewerFindCountMessage (match_count));
+            });
+            find.failed_to_find_text.connect (() => {
+                dispatch (new ViewerFindCountMessage (0));
+            });
+
             context_menu = new WebViewContextMenu (this, dispatch);
             context_menu.build_ui ();
+
+            // Widget-level signal; the member field shadows it in scope.
+            ((WebKit.WebView) this).context_menu.connect ((view, menu, hit) => {
+                var link = hit.link_uri ?? "";
+                bool external = link.has_prefix ("http://") ||
+                                link.has_prefix ("https://") ||
+                                link.has_prefix ("mailto:");
+                if (!external) return false;
+
+                var ext_item = new WebKit.ContextMenuItem.from_gaction (
+                    open_external_action,
+                    _("Open Link in Browser"), link);
+                menu.insert (ext_item, 0);
+
+                // CHM-internal links also offer a new tab.
+                if (!link.has_prefix ("mailto:")) {
+                    var tab_item = new WebKit.ContextMenuItem.from_gaction (
+                        new_tab_action,
+                        _("Open Link in New Tab"), link);
+                    menu.insert (tab_item, 1);
+                }
+
+                menu.append (new WebKit.ContextMenuItem.separator ());
+                return false;   // keep default items too
+            });
+        }
+
+        // Full chm:// URI for a CHM-internal path like "/dir/page.htm".
+        private string page_uri (string chm_path) {
+            // The archive segment is the full path, percent-encoded
+            // (allow_utf8=false → force percent-encoding; raw Cyrillic or
+            // spaces in a URI make WebKit silently drop the load; the '/'
+            // separators of the path must not leak into the URI structure).
+            var esc = GLib.Uri.escape_string (book_path, null, false);
+            string p = chm_path;
+            if (!p.has_prefix ("/")) {
+                p = "/" + p;
+            }
+            return "chm://" + esc + p;
         }
 
         private bool on_decide_policy (WebView view, PolicyDecision decision, PolicyDecisionType decision_type) {
+            // target=_blank / window.open: no NEW_WINDOW_ACTION branch used
+            // to leave these dying silently in a hidden WebView. Route CHM
+            // targets into a new tab and externals to the desktop handler
+            // (review F12).
+            if (decision_type == PolicyDecisionType.NEW_WINDOW_ACTION) {
+                var wnd_decision = (NavigationPolicyDecision) decision;
+                var wnd_action = wnd_decision.get_navigation_action ();
+                var wuri = wnd_action?.get_request ()?.get_uri ();
+                decision.ignore ();
+                if (wuri != null) {
+                    if (wuri.has_prefix ("chm://")) {
+                        var wpath = chm_path_from_uri (wuri);
+                        if (wpath != null && wpath.length > 1)
+                            dispatch (new OpenInNewTabMessage (wpath));
+                    } else if (wuri.has_prefix ("http://") || wuri.has_prefix ("https://") ||
+                               wuri.has_prefix ("mailto:")) {
+                        launch_external (wuri);
+                    }
+                }
+                return true;
+            }
+
             if (decision_type != PolicyDecisionType.NAVIGATION_ACTION) {
                 return false;
             }
 
             var nav_decision = (NavigationPolicyDecision) decision;
             var nav_action = nav_decision.get_navigation_action ();
-            if (nav_action == null) {
-                return false;
-            }
+            if (nav_action == null) return false;
 
             var request = nav_action.get_request ();
-            if (request == null) {
-                return false;
-            }
+            if (request == null) return false;
 
             var uri = request.get_uri ();
-            if (uri == null) {
+            if (uri == null) return false;
+
+            // In-page anchors on the current page: let WebKit scroll.
+            if (uri.has_prefix ("about:") || uri.has_prefix ("data:")) {
                 return false;
             }
 
-            if (uri.has_prefix ("ms-its:")) {
-                // Handle ms-its: links (cross-CHM links)
-                nav_decision.use ();
-                dispatch (new NavigateMessage (uri));
-                return true;
-            } else if (uri.has_prefix ("chm://")) {
-                // Handle internal CHM links
-                nav_decision.use ();
-                // Extract path from chm:// URL
-                var path = uri.substring ("chm://".length);
-                // Find first / which separates filename from path
-                int slash_pos = path.index_of ("/");
-                if (slash_pos > 0) {
-                    path = path.substring (slash_pos);
-                    dispatch (new NavigateMessage (path));
+            if (uri.has_prefix ("chm://")) {
+                // Our own model-driven load: let it proceed natively without
+                // re-dispatching NAVIGATE (would loop / duplicate history).
+                if (loaded_url != null && uri == page_uri (loaded_url)) {
+                    return false;
                 }
+
+                // Same-document anchor (<a href="#sec">): stripping the
+                // fragment yields the page we are already showing — hand
+                // the jump to WebKit instead of redispatching NAVIGATE,
+                // which was a no-op for the already-loaded URL and never
+                // scrolled (review F3). Book segment must match too.
+                int hash = uri.index_of ("#");
+                if (hash >= 0 && loaded_url != null && loaded_url.length > 0 &&
+                    uri.has_prefix ("chm://" +
+                                    GLib.Uri.escape_string (book_path, null, false)) &&
+                    chm_path_from_uri (uri) == loaded_url) {
+                    return false;
+                }
+
+                var path = chm_path_from_uri (uri);
+                if (path == null) {
+                    nav_decision.ignore ();
+                    return true;
+                }
+                // Ignore the native navigation: the model-driven load after
+                // NAVIGATE_DONE is the only fetch (a use() here downloaded
+                // the page twice).
+                nav_decision.ignore ();
+                dispatch (new NavigateMessage (path));
                 return true;
-            } else if (uri.has_prefix ("http://") || uri.has_prefix ("https://")) {
-                // Allow external links to load normally
-                return false;
-            } else if (uri.has_prefix ("/") || uri.has_prefix ("#")) {
-                // Relative link within CHM
-                nav_decision.use ();
-                dispatch (new NavigateMessage (uri));
-                return true;
-            } else if (uri == "about:blank" || uri.has_prefix ("data:")) {
-                // Ignore about:blank and data: URI navigation
-                return false;
             }
 
-            return false;
+            if (uri.has_prefix ("ms-its:") || uri.has_prefix ("mk:@MSITStore:")) {
+                nav_decision.ignore ();
+                dispatch (new NavigateMessage (uri));
+                return true;
+            }
+
+            if (uri.has_prefix ("http://") || uri.has_prefix ("https://") ||
+                uri.has_prefix ("mailto:")) {
+                // External target: hand to the desktop's default handler.
+                nav_decision.ignore ();
+                launch_external (uri);
+                return true;
+            }
+
+            // Unknown schemes (file:, ftp:, …): never let them reach the
+            // engine — the CSP restricts subresources, not top-level
+            // navigation, so the default-use fallback rendered local
+            // files from inside book content (review F11).
+            nav_decision.ignore ();
+            return true;
+        }
+
+        // Used by the context menu action (win.open-external).
+        public void open_external (string uri) {
+            launch_external (uri);
+        }
+
+        private void launch_external (string uri) {
+            // fire-and-forget; failures surface as a toast
+            GLib.AppInfo.launch_default_for_uri_async.begin (uri, null, null, (obj, res) => {
+                try {
+                    GLib.AppInfo.launch_default_for_uri_async.end (res);
+                } catch (GLib.Error e) {
+                    dispatch (new ShowToastMessage (
+                        _("Cannot open %s: %s").printf (uri, e.message)));
+                }
+            });
         }
 
         private void on_load_changed (WebView view, LoadEvent load_event) {
-            switch (load_event) {
-                case LoadEvent.STARTED:
-                    var uri_start = get_uri () ?? "";
-                    if (uri_start != "" && uri_start != "about:blank" && !uri_start.has_prefix ("data:")) {
-                        dispatch (new NavigateMessage (uri_start));
-                    }
-                    break;
-                case LoadEvent.COMMITTED:
-                    break;
-                case LoadEvent.REDIRECTED:
-                    break;
-                case LoadEvent.FINISHED:
-                    var title = get_title () ?? "";
-                    var uri = get_uri () ?? "/";
-                    
-                    // Don't dispatch for data: URIs or about:blank - we handle navigation via decide_policy
-                    if (!uri.has_prefix ("data:") && uri != "about:blank") {
-                        dispatch (new NavigateDoneMessage (uri, title));
-                    }
-                    break;
+            // Navigation truth lives in the model: NAVIGATE_DONE is dispatched
+            // from the update function, not from WebKit load events, so that
+            // history is pushed exactly once per navigation.
+        }
+
+        // Extract "/path/page.htm" from "chm://<book-basename>/path/page.htm".
+        private string? chm_path_from_uri (string uri) {
+            const string prefix = "chm://";
+            if (!uri.has_prefix (prefix)) return null;
+
+            string rest = uri.substring (prefix.length);
+            int slash = rest.index_of ("/");
+            if (slash < 0) return null;
+
+            string path = rest.substring (slash);
+            int anchor = path.index_of ("#");
+            if (anchor >= 0) path = path.substring (0, anchor);
+            int query = path.index_of ("?");
+            if (query >= 0) path = path.substring (0, query);
+
+            var decoded = GLib.Uri.unescape_string (path, null);
+            return decoded ?? path;
+        }
+
+        // ── Find-in-page (WebKit FindController)
+        private void run_find (string text, bool case_sensitive) {
+            if (text.length == 0) {
+                get_find_controller ().search_finish ();
+                return;
+            }
+            FindOptions opts = FindOptions.WRAP_AROUND;
+            if (!case_sensitive) opts |= FindOptions.CASE_INSENSITIVE;
+            get_find_controller ().search (text, (uint32) opts, uint.MAX);
+        }
+
+        // Print current page through the platform dialog.
+        public void print_page () {
+            var op = new WebKit.PrintOperation (this);
+            op.run_dialog ((Gtk.Window?) get_root ());
+        }
+
+        // Load when the model's current URL differs from what we show.
+        // Called from update() and on tab activation.
+        public void sync_if_needed (AppModel model) {
+            var cur = model.viewer.current_url;
+            var book = GLib.Path.get_basename (model.chm_file.filename ());
+            if (model.file_open && cur.length > 0 &&
+                (cur != loaded_url || book != loaded_book)) {
+                loaded_url = cur;
+                loaded_book = book;
+                load_uri (page_uri (cur));
             }
         }
 
         public void update (AppMessage msg, AppModel model) {
-            // Load pending HTML if available (regardless of message type)
-            if (model.viewer.pending_html != null) {
-                // Rewrite relative links in HTML to use chm:// scheme
-                var html = rewrite_links (model.viewer.pending_html, model.chm_file.filename ());
-                // Store HTML and let realize signal load it
-                pending_html = html;
-                // If already realized, load immediately
-                if (get_realized ()) {
-                    load_html (pending_html, "about:blank");
-                    pending_html = null;
-                }
-            }
-            
+            sync_if_needed (model);
+
             switch (msg.kind) {
-                case AppMessageKind.NAVIGATE_DONE: {
-                    // NAVIGATE_DONE specific handling if needed
+                case AppMessageKind.VIEWER_FIND: {
+                    var fm = (ViewerFindMessage) msg;
+                    run_find (fm.text, fm.case_sensitive);
                     break;
                 }
+
+                case AppMessageKind.VIEWER_PRINT:
+                    print_page ();
+                    break;
+
+                case AppMessageKind.VIEWER_COPY:
+                    execute_editing_command ("Copy");
+                    break;
+
+                case AppMessageKind.VIEWER_FIND_NEXT:
+                    get_find_controller ().search_next ();
+                    break;
+
+                case AppMessageKind.VIEWER_FIND_PREV:
+                    get_find_controller ().search_previous ();
+                    break;
 
                 case AppMessageKind.VIEWER_FONT_INCREASE:
                 case AppMessageKind.VIEWER_FONT_DECREASE:
@@ -171,163 +336,93 @@ namespace Vchm.View {
                     break;
                 }
 
-                case AppMessageKind.VIEWER_TOGGLE_IMAGES: {
-                    var settings = get_settings ();
-                    settings.auto_load_images = model.viewer.show_images;
-                    reload ();
-                    break;
-                }
-
-                case AppMessageKind.VIEWER_FIND: {
-                    // TODO: Implement find in page for WebKitGTK 6.0
-                    break;
-                }
-
-                case AppMessageKind.VIEWER_FIND_NEXT: {
-                    break;
-                }
-
-                case AppMessageKind.VIEWER_FIND_PREV: {
-                    break;
-                }
-
                 default:
                     break;
             }
         }
 
-        // Rewrite relative links in HTML to use chm:// scheme for proper resource loading
-        private string rewrite_links (string html, string chm_filename) {
-            var basename = GLib.Path.get_basename (chm_filename);
-            var chm_prefix = "chm://%s/".printf (basename);
-            
-            // Use a simple manual replacement to avoid regex issues
-            var result = new StringBuilder ();
-            int i = 0;
-            while (i < html.length) {
-                // Check for href="/...
-                if (i + 6 <= html.length && html.substring (i, 6) == "href=\"/") {
-                    result.append ("href=\\\"");
-                    result.append (chm_prefix);
-                    i += 6;
-                }
-                // Check for href='#...
-                else if (i + 6 <= html.length && html.substring (i, 6) == "href='#") {
-                    result.append ("href='");
-                    result.append (chm_prefix);
-                    i += 6;
-                }
-                // Check for href="#...
-                else if (i + 6 <= html.length && html.substring (i, 6) == "href=\\\"#") {
-                    result.append ("href=\\\"");
-                    result.append (chm_prefix);
-                    i += 6;
-                }
-                // Check for href='#...
-                else if (i + 6 <= html.length && html.substring (i, 6) == "href='#") {
-                    result.append ("href='");
-                    result.append (chm_prefix);
-                    i += 6;
-                }
-                // Fix src attributes (images, scripts, css)
-                else if (i + 5 <= html.length && html.substring (i, 5) == "src=\"/") {
-                    result.append ("src=\\\"");
-                    result.append (chm_prefix);
-                    i += 5;
-                }
-                else if (i + 5 <= html.length && html.substring (i, 5) == "src='/") {
-                    result.append ("src='");
-                    result.append (chm_prefix);
-                    i += 5;
-                }
-                else {
-                    result.append_c (html[i]);
-                    i++;
-                }
-            }
-            return result.str;
-        }
-
-        // Handle chm:// URI scheme requests
+        // Serve resources out of the archive. HTML is transcoded to UTF-8
+        // using the per-file encoding detected from #SYSTEM/#WINDOWS.
         private void on_chm_uri_request (WebKit.URISchemeRequest request) {
-            if (s_current_model == null) {
-                var error_stream = new GLib.MemoryInputStream.from_bytes (new GLib.Bytes (new uint8[0]));
-                request.finish (error_stream, 0, "text/plain");
-                return;
-            }
-
+            // "chm://<escaped-archive-path>/path" — resolve the owning archive.
             string uri = request.get_uri ();
-            stderr.printf ("DEBUG VIEWER: chm:// request: %s\n", uri);
-            
-            if (!uri.has_prefix ("chm://")) {
-                var error_stream = new GLib.MemoryInputStream.from_bytes (new GLib.Bytes (new uint8[0]));
-                request.finish (error_stream, 0, "text/plain");
+            const string prefix = "chm://";
+            if (!uri.has_prefix (prefix)) { finish_empty (request); return; }
+
+            string rest = uri.substring (prefix.length);
+            int slash = rest.index_of ("/");
+            if (slash <= 0) { finish_empty (request); return; }
+
+            var book_name_raw = rest.substring (0, slash);
+            var book_name = GLib.Uri.unescape_string (book_name_raw, null)
+                            ?? book_name_raw;
+            var book = CHMFile.by_path (book_name);
+            if (book == null || !book.is_open ()) { finish_empty (request); return; }
+
+            string? path = chm_path_from_uri (uri);
+            if (path == null || path.length <= 1) {
+                finish_empty (request);
                 return;
             }
 
-            // Parse chm://filename/path
-            string path = uri.substring ("chm://".length);
-            int slash_pos = path.index_of ("/");
-            string chm_filename;
-            string resource_path;
-            
-            if (slash_pos > 0) {
-                chm_filename = path.substring (0, slash_pos);
-                resource_path = path.substring (slash_pos);
-            } else {
-                var error_stream = new GLib.MemoryInputStream.from_bytes (new GLib.Bytes (new uint8[0]));
-                request.finish (error_stream, 0, "text/plain");
+            var bytes = book.get_bytes (path);
+            if (bytes == null) {
+                finish_empty (request);
                 return;
             }
 
-            // Verify filename matches
-            string expected_basename = GLib.Path.get_basename (s_current_model.chm_file.filename ());
-            if (chm_filename != expected_basename) {
-                stderr.printf ("DEBUG VIEWER: CHM filename mismatch: expected %s, got %s\n", expected_basename, chm_filename);
-                var error_stream = new GLib.MemoryInputStream.from_bytes (new GLib.Bytes (new uint8[0]));
-                request.finish (error_stream, 0, "text/plain");
+            string mime = Vchm.Model.CHMFile.mime_for_path (path);
+
+            if (mime == "text/html") {
+                var text = transcode_html (bytes, book.encoding ());
+                // Some compilers store non-Latin text as Latin-1 entities of
+                // the archive-encoded bytes ("&eth;" = CP1251 'р'). Decode
+                // those back to real characters before serving.
+                text = Vchm.Model.EntityByteDecoder.fixup (text, book.encoding ());
+                // The stream we serve is always UTF-8. If the document keeps
+                // its original <meta charset=windows-1251>, WebKit would
+                // re-decode our UTF-8 bytes as CP1251 → mojibake.
+                text = Vchm.Model.HtmlTextUtils.normalize_charset_decls (text);
+                // Book content is self-contained: allow only chm:/data:
+                // subresources, block the network at the engine level.
+                text = Vchm.Model.HtmlTextUtils.inject_local_only_csp (text);
+                var utf8_bytes = new GLib.Bytes (text.data);
+                var stream = new GLib.MemoryInputStream.from_bytes (utf8_bytes);
+                // Explicit charset: without it WebKit assumes windows-1252
+                // and mojibakes legitimate UTF-8 (e.g. C2 A0 → "Â").
+                request.finish (stream, utf8_bytes.get_size (),
+                                "text/html; charset=utf-8");
                 return;
             }
 
-            // Resolve and read the resource from CHM using new API
-            var bytes = s_current_model.chm_file.get_bytes (resource_path);
-            if (bytes != null) {
-                string mime = get_mime_type (resource_path);
-                var stream = new GLib.MemoryInputStream.from_bytes (bytes);
-                request.finish (stream, bytes.get_size (), mime);
-                return;
-            }
-
-            var error_stream = new GLib.MemoryInputStream.from_bytes (new GLib.Bytes (new uint8[0]));
-            request.finish (error_stream, 0, "text/plain");
+            var stream = new GLib.MemoryInputStream.from_bytes (bytes);
+            request.finish (stream, bytes.get_size (), mime);
         }
 
-        // Get MIME type from file extension
-        private string get_mime_type (string path) {
-            if (path.has_suffix (".html") || path.has_suffix (".htm"))
-                return "text/html";
-            else if (path.has_suffix (".css"))
-                return "text/css";
-            else if (path.has_suffix (".js"))
-                return "application/javascript";
-            else if (path.has_suffix (".png"))
-                return "image/png";
-            else if (path.has_suffix (".jpg") || path.has_suffix (".jpeg"))
-                return "image/jpeg";
-            else if (path.has_suffix (".gif"))
-                return "image/gif";
-            else if (path.has_suffix (".svg"))
-                return "image/svg+xml";
-            else if (path.has_suffix (".ico"))
-                return "image/x-icon";
-            else if (path.has_suffix (".pdf"))
-                return "application/pdf";
-            else if (path.has_suffix (".txt"))
-                return "text/plain";
-            else if (path.has_suffix (".xml"))
-                return "application/xml";
-            else
-                return "application/octet-stream";
+        private string transcode_html (GLib.Bytes bytes, string encoding) {
+            unowned uint8[] data = bytes.get_data ();
+
+            // NUL-terminated copy so the cast below is safe.
+            var buf = new uint8[data.length + 1];
+            Memory.copy (buf, data, data.length);
+            buf[data.length] = 0;
+
+            var raw = (string) buf;
+            if (raw.validate ()) return raw;
+
+            try {
+                return GLib.convert (raw, -1, "UTF-8", encoding);
+            } catch (GLib.ConvertError e) {
+                return raw;
+            }
         }
+
+
+        private void finish_empty (WebKit.URISchemeRequest request) {
+            var empty = new GLib.Bytes (new uint8[0]);
+            var stream = new GLib.MemoryInputStream.from_bytes (empty);
+            request.finish (stream, 0, "text/plain");
+        }
+
     }
 }

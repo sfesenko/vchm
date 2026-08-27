@@ -55,10 +55,17 @@ namespace Vchm.View {
             };
             append (close_btn);
 
+            var copy_btn = new Button.from_icon_name ("edit-copy-symbolic") {
+                tooltip_text = _("Copy selection")
+            };
+            copy_btn.clicked.connect (() => dispatch (new ViewerCopyMessage ()));
+            append (copy_btn);
+
             var separator2 = new Separator (Orientation.VERTICAL);
             append (separator2);
 
-            // View buttons
+            // View buttons — ToggleButtons mirror the stateful
+            // win.toggle_* actions, so check-state stays in sync.
             var topics_btn = new ToggleButton () {
                 icon_name = "sidebar-show-symbolic",
                 tooltip_text = _("Contents"),
@@ -83,20 +90,22 @@ namespace Vchm.View {
             var separator3 = new Separator (Orientation.VERTICAL);
             append (separator3);
 
-            // Font controls
-            var font_decrease_btn = new Button.from_icon_name ("text-size-decrease-symbolic") {
+            // Font controls. zoom-in/out exist in every theme; the
+            // previous text-size-*-symbolic names are in no icon set and
+            // rendered as blank boxes.
+            var font_decrease_btn = new Button.from_icon_name ("zoom-out-symbolic") {
                 tooltip_text = _("Decrease Font Size"),
                 action_name = "win." + AppView.ACTION_FONT_DECREASE
             };
             append (font_decrease_btn);
 
-            var font_increase_btn = new Button.from_icon_name ("text-size-increase-symbolic") {
+            var font_increase_btn = new Button.from_icon_name ("zoom-in-symbolic") {
                 tooltip_text = _("Increase Font Size"),
                 action_name = "win." + AppView.ACTION_FONT_INCREASE
             };
             append (font_increase_btn);
 
-            var font_reset_btn = new Button.from_icon_name ("format-text-direction-rtl-symbolic") {
+            var font_reset_btn = new Button.from_icon_name ("view-refresh-symbolic") {
                 tooltip_text = _("Reset Font Size"),
                 action_name = "win." + AppView.ACTION_FONT_RESET
             };
@@ -120,12 +129,9 @@ namespace Vchm.View {
             var print_btn = new Button.from_icon_name ("document-print-symbolic") {
                 tooltip_text = _("Print")
             };
-            print_btn.clicked.connect (() => print ());
+            print_btn.clicked.connect (() =>
+                dispatch (new ViewerPrintMessage ()));
             append (print_btn);
-        }
-
-        private void print () {
-            // TODO: Implement printing
         }
 
         public void update (AppMessage msg, AppModel model) {

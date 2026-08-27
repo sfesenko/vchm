@@ -64,11 +64,15 @@ int main (string[] args) {
         }
     });
 
-    // Subscription: auto-save settings
+    // Subscription: auto-save only when something actually changed.
     program.add_subscription ((dispatch) => {
+        var last_fp = "";
         GLib.Timeout.add_seconds (5, () => {
             var m = program.get_model ();
-            if (m.settings.window_width != 0) {
+            if (m.settings.window_width == 0) return GLib.Source.CONTINUE;
+            string fp = m.settings.fingerprint ();
+            if (fp != last_fp) {
+                last_fp = fp;
                 m.settings.save ();
             }
             return GLib.Source.CONTINUE;

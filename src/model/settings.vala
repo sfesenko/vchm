@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sergii Fesenko
 
+using GLib;
+
 namespace Vchm.Model {
 
     // Application settings persisted to GSettings
     public class SettingsModel : Object {
         private const string SCHEMA_ID = "org.gnome.vchm";
         private GLib.Settings _settings;
+        private bool _schema_available = true;
 
         // Window state
         public int window_x { get; set; }
@@ -26,55 +29,122 @@ namespace Vchm.Model {
         public int font_size { get; set; }
         public string font_family { get; set; }
         public string fixed_font_family { get; set; }
-        public bool show_images { get; set; }
 
         // File history
         public string[] recent_files { get; set; }
+        public string[] bookmark_rows { get; set; }
 
         // Last opened directory
         public string last_opened_dir { get; set; }
 
         public SettingsModel () {
-            _settings = new GLib.Settings (SCHEMA_ID);
+            // Check if schema is available before creating Settings object
+            // GLib.Settings constructor aborts if schema not found
+            var source = SettingsSchemaSource.get_default ();
+            if (source != null) {
+                var schema = source.lookup (SCHEMA_ID, true);
+                if (schema != null) {
+                    _settings = new GLib.Settings (SCHEMA_ID);
+                } else {
+                    _schema_available = false;
+                    stderr.printf ("Warning: GSettings schema '%s' not installed, using defaults\n", SCHEMA_ID);
+                }
+            } else {
+                _schema_available = false;
+                stderr.printf ("Warning: No GSettings schema source available\n");
+            }
             load ();
         }
 
         public void load () {
-            window_x = _settings.get_int ("window-x");
-            window_y = _settings.get_int ("window-y");
-            window_width = _settings.get_int ("window-width");
-            window_height = _settings.get_int ("window-height");
-            window_maximized = _settings.get_boolean ("window-maximized");
-            sash_position = _settings.get_int ("sash-position");
-            show_topics = _settings.get_boolean ("show-topics");
-            show_index = _settings.get_boolean ("show-index");
-            show_search = _settings.get_boolean ("show-search");
-            active_side_panel = _settings.get_int ("active-side-panel");
-            font_size = _settings.get_int ("font-size");
-            font_family = _settings.get_string ("font-family");
-            fixed_font_family = _settings.get_string ("fixed-font-family");
-            show_images = _settings.get_boolean ("show-images");
-            recent_files = _settings.get_strv ("recent-files");
-            last_opened_dir = _settings.get_string ("last-opened-dir");
+            if (!_schema_available) {
+                apply_defaults ();
+                return;
+            }
+            
+            try {
+                window_x = _settings.get_int ("window-x");
+                window_y = _settings.get_int ("window-y");
+                window_width = _settings.get_int ("window-width");
+                window_height = _settings.get_int ("window-height");
+                window_maximized = _settings.get_boolean ("window-maximized");
+                sash_position = _settings.get_int ("sash-position");
+                show_topics = _settings.get_boolean ("show-topics");
+                show_index = _settings.get_boolean ("show-index");
+                show_search = _settings.get_boolean ("show-search");
+                active_side_panel = _settings.get_int ("active-side-panel");
+                font_size = _settings.get_int ("font-size");
+                font_family = _settings.get_string ("font-family");
+                fixed_font_family = _settings.get_string ("fixed-font-family");
+                recent_files = _settings.get_strv ("recent-files");
+            bookmark_rows = _settings.get_strv ("bookmarks");
+                last_opened_dir = _settings.get_string ("last-opened-dir");
+            } catch (GLib.Error e) {
+                stderr.printf ("Warning: Failed to load settings: %s\n", e.message);
+                apply_defaults ();
+            }
+        }
+
+        private void apply_defaults () {
+            window_x = -1;
+            window_y = -1;
+            window_width = 1024;
+            window_height = 768;
+            window_maximized = false;
+            sash_position = 250;
+            show_topics = true;
+            show_index = true;
+            show_search = false;
+            active_side_panel = 0;
+            font_size = 12;
+            font_family = "Sans";
+            fixed_font_family = "Monospace";
+            recent_files = new string[0];
+            last_opened_dir = "";
+        }
+
+        // Compact snapshot of every persisted value; used to avoid
+        // rewriting GSettings when nothing actually changed.
+        public string fingerprint () {
+            var sb = new StringBuilder ();
+            sb.append_printf ("%d;%d;%d;%d;%b;%d;", window_x, window_y,
+                              window_width, window_height, window_maximized,
+                              sash_position);
+            sb.append_printf ("%b;%b;%b;%d;", show_topics, show_index,
+                              show_search, active_side_panel);
+            sb.append_printf ("%d;%s;%s;", font_size, font_family,
+                              fixed_font_family);
+            foreach (var f in recent_files) sb.append_printf ("%s,", f);
+            sb.append ("|");
+            foreach (var r in bookmark_rows) sb.append_printf ("%s,", r);
+            sb.append ("|");
+            sb.append (last_opened_dir);   // lone dir change must persist too
+            return sb.str;
         }
 
         public void save () {
-            _settings.set_int ("window-x", window_x);
-            _settings.set_int ("window-y", window_y);
-            _settings.set_int ("window-width", window_width);
-            _settings.set_int ("window-height", window_height);
-            _settings.set_boolean ("window-maximized", window_maximized);
-            _settings.set_int ("sash-position", sash_position);
-            _settings.set_boolean ("show-topics", show_topics);
-            _settings.set_boolean ("show-index", show_index);
-            _settings.set_boolean ("show-search", show_search);
-            _settings.set_int ("active-side-panel", active_side_panel);
-            _settings.set_int ("font-size", font_size);
-            _settings.set_string ("font-family", font_family);
-            _settings.set_string ("fixed-font-family", fixed_font_family);
-            _settings.set_boolean ("show-images", show_images);
-            _settings.set_strv ("recent-files", recent_files);
-            _settings.set_string ("last-opened-dir", last_opened_dir);
+            if (!_schema_available) return;
+            
+            try {
+                _settings.set_int ("window-x", window_x);
+                _settings.set_int ("window-y", window_y);
+                _settings.set_int ("window-width", window_width);
+                _settings.set_int ("window-height", window_height);
+                _settings.set_boolean ("window-maximized", window_maximized);
+                _settings.set_int ("sash-position", sash_position);
+                _settings.set_boolean ("show-topics", show_topics);
+                _settings.set_boolean ("show-index", show_index);
+                _settings.set_boolean ("show-search", show_search);
+                _settings.set_int ("active-side-panel", active_side_panel);
+                _settings.set_int ("font-size", font_size);
+                _settings.set_string ("font-family", font_family);
+                _settings.set_string ("fixed-font-family", fixed_font_family);
+                _settings.set_strv ("recent-files", recent_files);
+            _settings.set_strv ("bookmarks", bookmark_rows);
+                _settings.set_string ("last-opened-dir", last_opened_dir);
+            } catch (GLib.Error e) {
+                stderr.printf ("Warning: Failed to save settings: %s\n", e.message);
+            }
         }
 
         public void add_recent_file (string filepath) {

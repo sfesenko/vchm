@@ -1,199 +1,100 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sergii Fesenko
 
-// Test CHM file parsing using chmlib
+// Regression coverage for the chmlib wrapper layer: asserts the load /
+// metadata / content pipeline against tests/fixtures/basic.chm (review
+// F17 — the previous version only printed diagnostics and returned 0).
 
 using ChmLib;
 using GLib;
 using Vchm.Model;
 
-void test_chm_open (string filename) {
-    var file = chm_open (filename);
-    if (file == null) {
-        stderr.printf ("Failed to open CHM file: %s\n", filename);
-        return;
-    }
-    
-    stderr.printf ("Successfully opened CHM file: %s\n", filename);
-    
-    // Try to resolve #SYSTEM
-    ChmLib.UnitInfoStruct ui;
-    if (chm_resolve_object (file, "/#SYSTEM", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #SYSTEM: start=%lu, length=%lu\n", ui.start, ui.length);
-        
-        var buffer = new uint8[(int)ui.length];
-        var read = chm_retrieve_object (file, &ui, buffer, 0, (long)ui.length);
-        if (read > 0) {
-            stderr.printf ("Read %ld bytes from #SYSTEM\n", read);
-            var text = (string)buffer;
-            stderr.printf ("Content: %s\n", text);
-        }
-    } else {
-        stderr.printf ("Failed to resolve #SYSTEM\n");
-    }
-    
-    // Try to resolve #TOCIDX
-    if (chm_resolve_object (file, "/#TOCIDX", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #TOCIDX: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#TOCIDX not found\n");
-    }
-    
-    // Try to resolve #TOPICS
-    if (chm_resolve_object (file, "/#TOPICS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #TOPICS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#TOPICS not found\n");
-    }
-    
-    // Try to resolve #STRINGS
-    if (chm_resolve_object (file, "/#STRINGS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #STRINGS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#STRINGS not found\n");
-    }
-    
-    // Try to resolve #URLTBL
-    if (chm_resolve_object (file, "/#URLTBL", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #URLTBL: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#URLTBL not found\n");
-    }
-    
-    // Try to resolve #URLSTR
-    if (chm_resolve_object (file, "/#URLSTR", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #URLSTR: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#URLSTR not found\n");
-    }
-    
-    // Try to resolve #TOCIDX
-    if (chm_resolve_object (file, "/#TOCIDX", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #TOCIDX: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#TOCIDX not found\n");
-    }
-    
-    // Try to resolve #TOPICS
-    if (chm_resolve_object (file, "/#TOPICS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #TOPICS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#TOPICS not found\n");
-    }
-    
-    // Try to resolve #STRINGS
-    if (chm_resolve_object (file, "/#STRINGS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #STRINGS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#STRINGS not found\n");
-    }
-    
-    // Try to resolve #URLTBL
-    if (chm_resolve_object (file, "/#URLTBL", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #URLTBL: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#URLTBL not found\n");
-    }
-    
-    // Try to resolve #URLSTR
-    if (chm_resolve_object (file, "/#URLSTR", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #URLSTR: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#URLSTR not found\n");
-    }
-    
-    // Try to resolve #WINDOWS
-    if (chm_resolve_object (file, "/#WINDOWS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #WINDOWS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#WINDOWS not found\n");
-    }
-    
-    // Try to resolve #STRINGS
-    if (chm_resolve_object (file, "/#STRINGS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #STRINGS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#STRINGS not found\n");
-    }
-    
-    // Try to resolve #IVB
-    if (chm_resolve_object (file, "/#IVB", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #IVB: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#IVB not found\n");
-    }
-    
-    // Try to resolve #STRINGS
-    if (chm_resolve_object (file, "/#STRINGS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        stderr.printf ("Found #STRINGS: start=%lu, length=%lu\n", ui.start, ui.length);
-    } else {
-        stderr.printf ("#STRINGS not found\n");
-    }
-    
+string fixture_path;
+
+void test_load () {
+    var chm = new CHMFile ();
+    assert_true (chm.load (fixture_path));
+    assert_true (chm.is_open ());
+    assert_true (chm.filename () == fixture_path);
+}
+
+void test_metadata () {
+    var chm = new CHMFile ();
+    assert_true (chm.load (fixture_path));
+    // basic.chm carries #SYSTEM records: title "Test Book", home intro.html.
+    assert_cmpstr (chm.title (), EQ, "Test Book");
+    assert_cmpstr (chm.home_page (), EQ, "/intro.html");
+}
+
+void test_resolve_content () {
+    var chm = new CHMFile ();
+    assert_true (chm.load (fixture_path));
+    assert_true (chm.has_object ("/intro.html"));
+    assert_false (chm.has_object ("/no-such-page.htm"));
+
+    var bytes = chm.get_bytes ("/intro.html");
+    assert_true (bytes != null);
+    assert_true (bytes.get_size () > 0);
+    assert_true (((string) bytes.get_data ()).contains ("Intro"));
+
+    var content = chm.get_content ("/guide.htm");
+    assert_true (content.success);
+    assert_cmpstr (content.mime_type, EQ, "text/html");
+
+    assert_null (chm.get_bytes ("/no-such-page.htm"));
+    assert_false (chm.get_content ("/no-such-page.htm").success);
+}
+
+void test_topics_data () {
+    var chm = new CHMFile ();
+    assert_true (chm.load (fixture_path));
+
+    uint8[] topics, strings, urltbl, urlstr;
+    uint8[]? topidx;
+    assert_true (chm.get_topics_data (out topics, out strings,
+                                      out urltbl, out urlstr, out topidx));
+    // Two #TOPICS entries of 16 bytes each.
+    assert_cmpuint ((uint) topics.length, GE, 32);
+    assert_true (strings.length > 0);
+    assert_true (urltbl.length > 0);
+    assert_true (urlstr.length > 0);
+    assert_true (topidx != null);
+    // get_topics_data() computes the first topic URL from the same data.
+    assert_cmpstr (chm.get_first_topic_url (), EQ, "/intro.html");
+
+    // Internal metadata units resolve through raw chmlib too.
+    var file = chm_open (fixture_path);
+    assert_true (file != null);
+    UnitInfoStruct ui;
+    assert_cmpint (chm_resolve_object (file, "/#SYSTEM", out ui), EQ,
+                   ChmLib.RESOLVE_SUCCESS);
+    assert_cmpuint ((uint) ui.length, GE, 5);
+    uint8[] buf = new uint8[ui.length];
+    assert_cmpint ((int) chm_retrieve_object (file, &ui, buf, 0, (long) ui.length),
+                   GT, 0);
     chm_close (file);
 }
 
-void test_resolve_content (string filename) {
-    var file = chm_open (filename);
-    if (file == null) {
-        stderr.printf ("Failed to open\n");
-        return;
-    }
-    
-    ChmLib.UnitInfoStruct ui;
-    
-    // Try to read #TOPICS to see the structure
-    if (chm_resolve_object (file, "/#TOPICS", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        var buffer = new uint8[(int)ui.length];
-        var read = chm_retrieve_object (file, &ui, buffer, 0, (long)ui.length);
-        if (read > 0) {
-            stderr.printf ("#TOPICS content (%ld bytes):\n", read);
-            // Print as hex dump for analysis
-            for (int i = 0; i < int.min ((int)read, 500); i++) {
-                stderr.printf ("%02x ", buffer[i]);
-                if ((i + 1) % 16 == 0) stderr.printf ("\n");
-            }
-            stderr.printf ("\n");
-        }
-    }
-    
-    // Try to read #URLSTR to see URLs
-    if (chm_resolve_object (file, "/#URLSTR", out ui) == ChmLib.RESOLVE_SUCCESS) {
-        var buffer = new uint8[(int)ui.length];
-        var read = chm_retrieve_object (file, &ui, buffer, 0, (long)ui.length);
-        if (read > 0) {
-            stderr.printf ("#URLSTR content (%ld bytes):\n", read);
-            var content = (string) buffer[0:read];
-            // Print first 1000 chars
-            stderr.printf ("%s\n", content.substring(0, int.min (1000, content.length)));
-        }
-    }
-    
-    chm_close (file);
-}
-
-void test_chmfile_class (string filename) {
-    var chm = new Vchm.Model.CHMFile ();
-    if (chm.load (filename)) {
-        stderr.printf ("CHMFile load successful\n");
-        stderr.printf ("Title: %s\n", chm.title ());
-        stderr.printf ("Home page: %s\n", chm.home_page ());
-        stderr.printf ("First topic URL: %s\n", chm.get_first_topic_url ());
-    } else {
-        stderr.printf ("CHMFile load failed\n");
-    }
+void test_close_is_idempotent () {
+    var chm = new CHMFile ();
+    assert_true (chm.load (fixture_path));
+    chm.close ();
+    assert_false (chm.is_open ());
+    assert_false (chm.has_object ("/intro.html"));
+    chm.close ();   // double-close must not crash
+    assert_false (chm.is_open ());
 }
 
 int main (string[] args) {
-    if (args.length < 2) {
-        stderr.printf ("Usage: %s <chm_file>\n", args[0]);
-        return 1;
-    }
-    
-    test_chm_open (args[1]);
-    stderr.printf ("\n--- Testing content resolution ---\n");
-    test_resolve_content (args[1]);
-    stderr.printf ("\n--- Testing CHMFile class ---\n");
-    test_chmfile_class (args[1]);
-    return 0;
+    Test.init (ref args);
+    fixture_path = args.length > 1 ? args[1]
+                                   : Path.build_filename ("tests", "fixtures", "basic.chm");
+
+    Test.add_func ("/chmlib/load", test_load);
+    Test.add_func ("/chmlib/metadata", test_metadata);
+    Test.add_func ("/chmlib/resolve_content", test_resolve_content);
+    Test.add_func ("/chmlib/topics_data", test_topics_data);
+    Test.add_func ("/chmlib/close_is_idempotent", test_close_is_idempotent);
+
+    return Test.run ();
 }

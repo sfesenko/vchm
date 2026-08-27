@@ -1,0 +1,4 @@
+# vCHM build options
+option('test_book', type: 'string', value: '', description: 'Path to a real .chm book for the chmlib smoke test')
+option('enable_render_test', type: 'boolean', value: false,
+       description: 'Build the display-backed render smoke test (GTK4+WebKit). Needs a working display; run via xvfb-run.')

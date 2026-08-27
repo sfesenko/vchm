@@ -40,6 +40,9 @@ namespace Vchm.Model {
         INDEX_NEXT,
         INDEX_PREV,
 
+        // Panels
+        PANELS_REBUILT,
+
         // Search
         SEARCH_QUERY_CHANGED,
         SEARCH_EXECUTE,
@@ -54,13 +57,21 @@ namespace Vchm.Model {
         VIEWER_FONT_DECREASE,
         VIEWER_FONT_RESET,
         VIEWER_FONT_CHANGED,
-        VIEWER_TOGGLE_IMAGES,
         VIEWER_FIND,
         VIEWER_FIND_NEXT,
         VIEWER_FIND_PREV,
+        VIEWER_FIND_COUNT,
+        VIEWER_PRINT,
+        VIEWER_COPY,
 
         // History
         HISTORY_CLEAR,
+        SET_ENCODING,
+        BOOKMARK_ADD,
+        BOOKMARK_REMOVE,
+        BOOKMARK_JUMP,
+        BOOKMARKS_CHANGED,
+        OPEN_IN_NEW_TAB,
 
         // Window
         WINDOW_STATE_CHANGED,
@@ -71,6 +82,7 @@ namespace Vchm.Model {
 
         // Application
         APP_QUIT,
+        APP_QUIT_INTERNAL,
         ABOUT_DIALOG,
         PREFERENCES_DIALOG,
     }
@@ -96,10 +108,12 @@ namespace Vchm.Model {
         public string path { get; private set; }
         public string title { get; private set; }
         public string home_page { get; private set; }
-        public OpenFileDoneMessage (string path, string title, string home_page) {
+        public BookContext ctx { get; private set; }
+        public OpenFileDoneMessage (string path, string title, string home_page, BookContext? ctx = null) {
             this.path = path;
             this.title = title;
             this.home_page = home_page;
+            this.ctx = ctx;
         }
     }
 
@@ -138,9 +152,14 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.NAVIGATE_DONE; } }
         public string url { get; private set; }
         public string title { get; private set; }
-        public NavigateDoneMessage (string url, string title) {
+        // Original NAVIGATE target this result belongs to. The single
+        // model.intended_url slot races when a second navigation starts
+        // before the first worker reports back (review F7).
+        public string intended_url { get; private set; }
+        public NavigateDoneMessage (string url, string title, string? intended_url = null) {
             this.url = url;
             this.title = title;
+            this.intended_url = intended_url ?? url;
         }
     }
 
@@ -237,6 +256,17 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.INDEX_PREV; } }
     }
 
+    // ── Panels ──
+    public class PanelsRebuiltMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.PANELS_REBUILT; } }
+        public TopicsModel topics { get; private set; }
+        public IndexModel index { get; private set; }
+        public PanelsRebuiltMessage (TopicsModel topics, IndexModel index) {
+            this.topics = topics;
+            this.index = index;
+        }
+    }
+
     // ── Search ──
     public class SearchQueryChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SEARCH_QUERY_CHANGED; } }
@@ -305,14 +335,14 @@ namespace Vchm.Model {
         }
     }
 
-    public class ViewerToggleImagesMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.VIEWER_TOGGLE_IMAGES; } }
-    }
-
     public class ViewerFindMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.VIEWER_FIND; } }
         public string text { get; private set; }
-        public ViewerFindMessage (string text) { this.text = text; }
+        public bool case_sensitive { get; private set; }
+        public ViewerFindMessage (string text, bool case_sensitive = false) {
+            this.text = text;
+            this.case_sensitive = case_sensitive;
+        }
     }
 
     public class ViewerFindNextMessage : AppMessage {
@@ -321,6 +351,52 @@ namespace Vchm.Model {
 
     public class ViewerFindPrevMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.VIEWER_FIND_PREV; } }
+    }
+
+    public class BookmarkAddMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.BOOKMARK_ADD; } }
+    }
+
+    public class BookmarkRemoveMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.BOOKMARK_REMOVE; } }
+        public string title { get; private set; }
+        public BookmarkRemoveMessage (string title) { this.title = title; }
+    }
+
+    public class BookmarksChangedMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.BOOKMARKS_CHANGED; } }
+    }
+
+    public class BookmarkJumpMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.BOOKMARK_JUMP; } }
+        public string url { get; private set; }
+        public BookmarkJumpMessage (string url) { this.url = url; }
+    }
+
+    public class OpenInNewTabMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.OPEN_IN_NEW_TAB; } }
+        public string url { get; private set; }
+        public OpenInNewTabMessage (string url) { this.url = url; }
+    }
+
+    public class SetEncodingMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.SET_ENCODING; } }
+        public string encoding { get; private set; }
+        public SetEncodingMessage (string encoding) { this.encoding = encoding; }
+    }
+
+    public class ViewerCopyMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.VIEWER_COPY; } }
+    }
+
+    public class ViewerPrintMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.VIEWER_PRINT; } }
+    }
+
+    public class ViewerFindCountMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.VIEWER_FIND_COUNT; } }
+        public uint match_count { get; private set; }
+        public ViewerFindCountMessage (uint match_count) { this.match_count = match_count; }
     }
 
     // ── History ──
@@ -348,7 +424,7 @@ namespace Vchm.Model {
 
     // ── Application ──
     public class QuitMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.APP_QUIT; } }
+        public override AppMessageKind kind { get { return AppMessageKind.APP_QUIT_INTERNAL; } }
         public int width { get; private set; }
         public int height { get; private set; }
         public bool maximized { get; private set; }

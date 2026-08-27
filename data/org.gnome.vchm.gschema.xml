@@ -53,13 +53,14 @@
       <default>'Monospace'</default>
       <summary>Fixed font family</summary>
     </key>
-    <key name="show-images" type="b">
-      <default>true</default>
-      <summary>Show images in viewer</summary>
-    </key>
     <key name="recent-files" type="as">
       <default>[]</default>
       <summary>Recent files list</summary>
+    </key>
+    <key name="bookmarks" type="as">
+      <default>[]</default>
+      <summary>Bookmarks</summary>
+      <description>Per-entry: archive-path, unit separator, URL, unit separator, title.</description>
     </key>
     <key name="last-opened-dir" type="s">
       <default>''</default>

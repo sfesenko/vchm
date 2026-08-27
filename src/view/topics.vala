@@ -11,6 +11,10 @@ namespace Vchm.View {
         private TreeView tree_view;
         private TreeStore store;
         private ScrolledWindow scrolled;
+        private TopicsItem? built_root = null;   // change-detection guard
+        // Guards against programmatic cursor moves (selection sync,
+        // rebuilds) re-entering the navigate-on-select handler.
+        private bool syncing = false;
 
         public TopicsView () {
             Object (orientation: Orientation.VERTICAL);
@@ -54,6 +58,24 @@ namespace Vchm.View {
                 }
             });
 
+            // Navigates on selection (single click), not only on
+            // double-click (chmtoc EVT_TREE_SEL_CHANGED parity).
+            tree_view.cursor_changed.connect (() => {
+                if (syncing) return;
+                TreePath? path;
+                TreeViewColumn? col;
+                tree_view.get_cursor (out path, out col);
+                if (path == null) return;
+                TreeIter iter;
+                if (!store.get_iter (out iter, path)) return;
+                Value val;
+                store.get_value (iter, 1, out val);
+                string? url = val.get_string ();
+                if (url != null && url != "") {
+                    dispatch (new TopicsSelectionChangedMessage (url));
+                }
+            });
+
             tree_view.row_expanded.connect ((iter, path) => {
                 Value val;
                 store.get_value (iter, 1, out val);
@@ -78,28 +100,40 @@ namespace Vchm.View {
 
         public void update (AppMessage msg, AppModel model) {
             switch (msg.kind) {
-                case AppMessageKind.OPEN_FILE_DONE: {
-                    rebuild_tree (model);
-                    break;
-                }
 
                 case AppMessageKind.CLOSE_FILE: {
+                    built_root = null;
                     store.clear ();
                     break;
                 }
 
                 case AppMessageKind.TOPICS_SELECTION_CHANGED: {
-                    select_url (model.topics.selected_url);
+                    // Selection initiated here already moved the cursor.
                     break;
                 }
 
                 case AppMessageKind.TOPICS_ITEM_EXPANDED: {
-                    expand_url (model.topics.selected_url);
+                    var em = (TopicsItemExpandedMessage) msg;
+                    expand_url (em.url);
                     break;
                 }
 
                 case AppMessageKind.TOPICS_ITEM_COLLAPSED: {
-                    collapse_url (model.topics.selected_url);
+                    var cm = (TopicsItemCollapsedMessage) msg;
+                    collapse_url (cm.url);
+                    break;
+                }
+
+                case AppMessageKind.NAVIGATE_DONE:
+                case AppMessageKind.PANELS_REBUILT: {
+                    // Coalescing guard + follow page changes: rebuild when
+                    // the root instance changed (PANELS_REBUILT swaps it
+                    // wholesale), then highlight current topic.
+                    if (model.topics.root != built_root) {
+                        built_root = model.topics.root;
+                        rebuild_tree (model);
+                    }
+                    select_url (model.topics.selected_url);
                     break;
                 }
 
@@ -109,11 +143,13 @@ namespace Vchm.View {
         }
 
         private void rebuild_tree (AppModel model) {
+            syncing = true;
             store.clear ();
             if (model.topics.root != null) {
                 add_items_recursive (null, model.topics.root);
             }
             tree_view.expand_all ();
+            syncing = false;
         }
 
         private void add_items_recursive (TreeIter? parent, TopicsItem item) {
@@ -126,14 +162,17 @@ namespace Vchm.View {
         }
 
         private void select_url (string? url) {
-            if (url == null) return;
-            // Find and select the row with matching URL
+            if (url == null || url.length == 0) return;
             TreeIter iter;
             if (store.get_iter_first (out iter)) {
                 TreeIter found_iter;
                 if (find_iter_by_url (iter, url, out found_iter)) {
                     var path = store.get_path (found_iter);
+                    syncing = true;
+                    tree_view.expand_to_path (path);
                     tree_view.set_cursor (path, null, false);
+                    syncing = false;
+                    tree_view.scroll_to_cell (path, null, true, 0.3f, 0f);
                 }
             }
         }

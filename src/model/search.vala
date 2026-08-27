@@ -3,7 +3,6 @@
 
 using GLib;
 using Gee;
-using Gtk;
 
 namespace Vchm.Model {
 
@@ -16,7 +15,6 @@ namespace Vchm.Model {
         public int selected_index { get; set; }
         public bool searching { get; set; }
         public string? error { get; set; }
-        public Gtk.ListStore? list_store { get; private set; }
 
         public SearchModel () {
             results = new Gee.ArrayList<SearchResult> ();
@@ -39,17 +37,14 @@ namespace Vchm.Model {
             clear ();
             searching = true;
             error = null;
-            
-            Gee.HashMap<string, string> raw_results;
-            if (chm_file.search (query, whole_words, titles_only, out raw_results)) {
-                foreach (var kvp in raw_results) {
-                    results.add (new SearchResult (kvp.value, kvp.key));
-                }
-                if (results.size > 0) {
-                    selected_index = 0;
-                }
+
+            Gee.ArrayList<SearchResult> raw_results;
+            chm_file.search (query, whole_words, titles_only, out raw_results);
+            results = raw_results;
+            if (results.size > 0) {
+                selected_index = 0;
             }
-            
+
             searching = false;
         }
     }

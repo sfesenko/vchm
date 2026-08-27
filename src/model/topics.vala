@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sergii Fesenko
+//
+// Pure-data topics tree (A1): no GTK types. Sources in priority order:
+// #TOCIDX binary TOC -> .hhc file -> flat enumeration. Binary walking uses
+// an explicit frame stack (A2) mirroring RecurseLoadBTOC ordering.
 
-using Gtk;
+using GLib;
 using Gee;
 
 namespace Vchm.Model {
@@ -27,13 +31,12 @@ namespace Vchm.Model {
         }
     }
 
-    // Model for the topics tree panel
+    // Model for the topics tree panel.
     public class TopicsModel : Object {
         public TopicsItem? root { get; private set; }
         public string? selected_url { get; set; }
         public bool loading { get; set; }
         public string? error { get; set; }
-        public Gtk.TreeStore? tree_store { get; private set; }
 
         public TopicsModel () {
             loading = false;
@@ -43,151 +46,264 @@ namespace Vchm.Model {
             root = null;
             selected_url = null;
             error = null;
-            tree_store = null;
         }
 
         public void build_from_chm (CHMFile chm_file) {
             clear ();
             loading = true;
             error = null;
-            
-            uint8[] topics;
-            uint8[] strings;
-            uint8[] urltbl;
-            uint8[] urlstr;
+
+            uint8[] topics, strings, urltbl, urlstr;
             uint8[]? topidx;
-            
-            if (!chm_file.get_topics_data (out topics, out strings, out urltbl, out urlstr, out topidx)) {
+
+            if (!chm_file.get_topics_data (out topics, out strings,
+                                           out urltbl, out urlstr, out topidx)) {
                 error = "Failed to read topics data from CHM";
                 loading = false;
                 return;
             }
-            
-            // Build the full tree from CHM
-            tree_store = build_topics_tree_store (topics, strings, urltbl, urlstr, topidx);
-            
-            // Also build internal structure for compatibility
-            if (tree_store != null) {
-                root = build_tree_from_store (tree_store);
-            } else {
-                // Fallback: create dummy root
-                root = new TopicsItem ("Loading...", "/");
-            }
-            
-            loading = false;
-        }
-        
-        private Gtk.TreeStore build_topics_tree_store (uint8[] topics, uint8[] strings, uint8[] urltbl, uint8[] urlstr, uint8[]? topidx) {
-            var store = new Gtk.TreeStore (2, typeof(string), typeof(string)); // name, url
-            
+
             if (topidx != null && topidx.length >= 4) {
-                // Use binary TOC tree
-                var nodes = new Gee.HashMap<uint32, NodeInfo> ();
-                uint32 root_offset = UINT32_FROM_ARRAY (topidx, 0);
-                uint32 offset = root_offset;
-                while (offset != 0 && offset + 24 <= topidx.length) {
-                    uint32 flags = UINT32_FROM_ARRAY (topidx, (int)offset + 4);
-                    uint32 index = UINT32_FROM_ARRAY (topidx, (int)offset + 8);
-                    uint32 next = UINT32_FROM_ARRAY (topidx, (int)offset + 16);
-                    uint32 child = UINT32_FROM_ARRAY (topidx, (int)offset + 20);
-                    
-                    nodes[offset] = new NodeInfo (offset, flags, index, next, child);
-                    offset = next;
-                }
-                
-                if (nodes.has_key (root_offset)) {
-                    TreeIter iter = TreeIter();
-                    build_tree_from_binary_toc (store, null, nodes, root_offset, topics, strings, urltbl, urlstr);
-                }
+                root = build_binary_root (topidx, topics, strings, urltbl, urlstr,
+                                          chm_file.encoding ());
             } else {
-                // Fallback: parse #TOPICS sequentially
-                int num_entries = topics.length / 16;
-                for (int i = 0; i < num_entries; i++) {
-                    int topic_offset = i * 16;
-                    if (topics.length < topic_offset + 12) break;
-                    
-                    string? name = get_item_name (topics, strings, (uint32)i, false);
-                    string? url = get_item_url (topics, strings, urltbl, urlstr, (uint32)i, false);
-                    
-                    if (name != null) {
-                        TreeIter iter = TreeIter();
-                        store.append (out iter, null);
-                        store.set (iter, 0, name, 1, url ?? "");
+                var hhc = chm_file.load_hhc_tree ();
+                if (hhc != null && hhc.size > 0) {
+                    root = new TopicsItem (_("Contents"), "");
+                    foreach (var e in hhc) {
+                        root.add_child (hhc_to_item (e));
                     }
                 }
             }
-            
-            return store;
+
+            // Last resort for metadata-poor archives.
+            if (root == null) {
+                root = build_flat_pages (chm_file);
+            }
+
+            loading = false;
         }
-        
-        private void build_tree_from_binary_toc (Gtk.TreeStore store, TreeIter? parent, 
-                                                  Gee.HashMap<uint32, NodeInfo> nodes, uint32 offset,
-                                                  uint8[] topics, uint8[] strings, uint8[] urltbl, uint8[] urlstr) {
-            NodeInfo? node = nodes[offset];
-            if (node == null) return;
-            
-            string? name = get_item_name (topics, strings, node.index, (node.flags & 0x8) != 0);
-            string? url = get_item_url (topics, strings, urltbl, urlstr, node.index, (node.flags & 0x8) != 0);
-            
-            if (name != null) {
-                TreeIter iter = TreeIter();
-                store.append (out iter, parent);
-                store.set (iter, 0, name, 1, url ?? "");
-                
-                // Process children
-                if ((node.flags & 0x4) != 0 && node.child != 0) {
-                    uint32 child_offset = node.child;
-                    while (child_offset != 0 && nodes.has_key (child_offset)) {
-                        build_tree_from_binary_toc (store, iter, nodes, child_offset, topics, strings, urltbl, urlstr);
-                        NodeInfo? child_node = nodes[child_offset];
-                        if (child_node != null) {
-                            child_offset = child_node.next;
-                        } else {
-                            break;
+
+        // Iterative DFS over #TOCIDX nodes. Frames hold each level's
+        // sibling-chain cursor and its parent item; children complete
+        // before the parent's next sibling.
+        private TopicsItem? build_binary_root (uint8[] topidx, uint8[] topics,
+                                               uint8[] strings, uint8[] urltbl,
+                                               uint8[] urlstr, string enc) {
+            var contents = new TopicsItem (_("Contents"), "");
+            if (topidx.length < 4) return null;
+
+            var frames = new Gee.ArrayList<uint32?> ();
+            var parents = new Gee.ArrayList<TopicsItem?> ();
+            frames.add (UINT32_FROM_ARRAY (topidx, 0));
+            parents.add (contents);
+            int level = 0;
+            int guard = 0;
+
+            while (level >= 0 && guard++ < 100000) {
+                uint32 offset = frames[level];
+
+                if (offset == 0) {                       // chain done: pop
+                    frames.remove_at (level);
+                    parents.remove_at (level);
+                    level--;
+                    continue;
+                }
+
+                if (topidx.length < offset + 20) break;
+
+                var flags = UINT32_FROM_ARRAY (topidx, (int) (offset + 4));
+                var index = UINT32_FROM_ARRAY (topidx, (int) (offset + 8));
+                var next = UINT32_FROM_ARRAY (topidx, (int) (offset + 0x10));
+
+                string? name = null;
+                string? url = null;
+
+                if ((flags & 0x8) != 0) {
+                    name = btoc_item_name (topics, strings, index, enc);
+                    url = btoc_item_url (topics, strings, urltbl, urlstr, index);
+                    if (name != null) {
+                        name = Vchm.Model.EntityByteDecoder.fixup (name, enc);
+                        name = strip_unknown_entities (name);
+                    }
+                } else if ((flags & 0x4) != 0) {
+                    var raw = read_cstring (strings, (int) index);
+                    if (raw != null && raw.length > 0)
+                        name = strip_unknown_entities (to_utf8 (raw, enc));
+                }
+
+                TopicsItem? item = null;
+                if (name != null) {
+                    item = new TopicsItem (name, url ?? "");
+                    parents[level].add_child (item);
+                }
+
+                uint32 child = 0;
+                if ((flags & 0x4) != 0 && topidx.length >= offset + 24) {
+                    child = UINT32_FROM_ARRAY (topidx, (int) (offset + 20));
+                }
+
+                if (child != 0 && level < 127) {
+                    frames[level] = next;                 // resume after children
+                    frames.add (child);
+                    parents.add (item != null ? item : parents[level]);
+                    level++;
+                } else {
+                    frames[level] = next;
+                    while (frames[level] == 0 && level > 0) {
+                        frames.remove_at (level);
+                        parents.remove_at (level);
+                        level--;
+                    }
+                }
+            }
+
+            return contents.children.size > 0 ? contents : null;
+        }
+
+        // Replace entities the decoder does not know (HHW lookalike names
+        // like &Dstrok; with no byte meaning) so labels stay readable.
+        private static string strip_unknown_entities (string s) {
+            if (!s.contains ("&")) return s;
+            var sb = new StringBuilder ();
+            int i = 0;
+            while (i < s.length) {
+                int amp = s.index_of ("&", i);
+                if (amp < 0) { sb.append (s.substring (i)); break; }
+                sb.append (s.substring (i, amp - i));
+                int semi = s.index_of (";", amp);
+                if (semi < 0 || semi - amp > 12) { sb.append_c ('&'); i = amp + 1; continue; }
+                var nm = s.substring (amp + 1, semi - amp - 1).down ();
+                bool known = nm.has_prefix ("#") ||
+                             nm == "amp" || nm == "lt" || nm == "gt" ||
+                             nm == "quot" || nm == "apos" ||
+                             HhcParser.entity_by_name (nm) > 0;
+                if (known) sb.append (s.substring (amp, semi - amp + 1));
+                i = semi + 1;
+            }
+            return sb.str;
+        }
+
+        private TopicsItem hhc_to_item (HhcEntry e) {
+            string url = e.local.length > 0 ? normalize_hhc_local (e.local) : "";
+            var item = new TopicsItem (strip_unknown_entities (e.name), url);
+            foreach (var c in e.children) {
+                item.add_child (hhc_to_item (c));
+            }
+            return item;
+        }
+
+        private static string normalize_hhc_local (string local) {
+            var t = local.strip ().split ("#")[0];
+            if (t.length == 0 || t.down ().has_prefix ("http")) return "";
+            if (t[0] != '/') return "/" + t;
+            return t;
+        }
+
+        // Flat TOC from enumerated content pages. Labels: the page
+        // <title>, then the first <h1>/<h2> heading, then the file
+        // name — HHW books often title every page with the book name,
+        // and raw file names read as broken content in the sidebar.
+        private TopicsItem build_flat_pages (CHMFile chm_file) {
+            var root_item = new TopicsItem (_("Contents"), "");
+            var enc = chm_file.encoding ();
+            int budget = 300;                       // bound work on huge archives
+
+            // First pass: collect candidate labels.
+            var pages = chm_file.list_content_pages ();
+            var titles = new string[pages.size];
+            for (int i = 0; i < pages.size; i++) {
+                string base_name = pages[i].substring (pages[i].last_index_of ("/") + 1);
+                titles[i] = base_name;
+                if (budget-- <= 0) continue;
+                var c = chm_file.get_content (pages[i]);
+                if (!c.success) continue;
+                string fixed = Vchm.Model.EntityByteDecoder.fixup (c.content, enc);
+                string t = extract_title (fixed, enc);
+                if (t.length > 0) titles[i] = t;
+            }
+
+            // Duplicate <title>s (book-name-per-page HHW style): prefer
+            // the first heading so entries stay distinguishable.
+            var counts = new Gee.HashMap<string, int> ();
+            foreach (var t in titles) counts[t] = (counts.has_key (t) ? counts[t] : 0) + 1;
+
+            budget = 300;
+            for (int i = 0; i < pages.size; i++) {
+                string label = titles[i];
+                if (counts[label] > 1 && budget-- > 0) {
+                    var c = chm_file.get_content (pages[i]);
+                    if (c.success) {
+                        string h = extract_heading (
+                            Vchm.Model.EntityByteDecoder.fixup (c.content, enc), enc);
+                        if (h.length > 0 && counts[h] == 0) {
+                            label = h;
                         }
                     }
                 }
+                if (counts[label] > 1)
+                    label = pages[i].substring (pages[i].last_index_of ("/") + 1);
+                root_item.add_child (new TopicsItem (label, pages[i]));
             }
-            
-            // Process next sibling
-            if (node.next != 0 && nodes.has_key (node.next)) {
-                build_tree_from_binary_toc (store, parent, nodes, node.next, topics, strings, urltbl, urlstr);
-            }
+            return root_item;
         }
-        
-        private TopicsItem? build_tree_from_store (Gtk.TreeStore store) {
-            TreeIter iter = TreeIter();
-            if (!store.get_iter_first (out iter)) {
-                return null;
-            }
-            
-            root = convert_iter_to_item (store, iter, null);
-            return root;
+
+        private static string extract_title (string html, string enc) {
+            var low = html.down ();
+            int open = low.index_of ("<title");
+            if (open < 0) return "";
+            int gt = html.index_of (">", open);
+            int close = low.index_of ("</title", gt);
+            if (gt < 0 || close < 0 || close <= gt + 1) return "";
+            var raw = html.substring (gt + 1, close - gt - 1).strip ();
+            if (raw.length == 0) return "";
+            // Titles may be Latin-1 entity encodings of archive bytes.
+            var decoded = Vchm.Model.EntityByteDecoder.fixup (raw, enc);
+            return HhcParser.decode_entities (decoded).strip ();
         }
-        
-        private TopicsItem? convert_iter_to_item (Gtk.TreeStore store, TreeIter iter, TopicsItem? parent) {
-            GLib.Value name_val = new GLib.Value (typeof(string));
-            GLib.Value url_val = new GLib.Value (typeof(string));
-            store.get_value (iter, 0, out name_val);
-            store.get_value (iter, 1, out url_val);
-            string name = name_val.get_string ();
-            string url = url_val.get_string ();
-            
-            var item = new TopicsItem (name, url);
-            item.parent = parent;
-            
-            // Process children
-            TreeIter child_iter = TreeIter();
-            if (store.iter_children (out child_iter, iter)) {
-                do {
-                    var child = convert_iter_to_item (store, child_iter, item);
-                    if (child != null) {
-                        item.add_child (child);
+
+        // First <h1>/<h2> heading text — a per-page label when the
+        // <title> is duplicated across the book.
+        private static string extract_heading (string html, string enc) {
+            var low = Vchm.Model.HtmlTextUtils.ascii_down (html);
+            foreach (string tag in new string[] { "<h1", "<h2" }) {
+                int open = low.index_of (tag);
+                if (open < 0) continue;
+                int gt = html.index_of (">", open);
+                if (gt < 0) continue;
+                string close_tag = "</" + tag.substring (1);
+                int close = low.index_of (close_tag, gt);
+                if (close < 0 || close <= gt + 1) continue;
+                var raw = html.substring (gt + 1, close - gt - 1).strip ();
+                if (raw.length == 0) continue;
+                var decoded = Vchm.Model.EntityByteDecoder.fixup (raw, enc);
+                // Drop nested markup (e.g. <a name=…> inside headings).
+                var sb = new StringBuilder ();
+                int i = 0;
+                bool in_tag = false;
+                for (i = 0; i < decoded.length; i++) {
+                    char ch = decoded[i];
+                    if (ch == '<') { in_tag = true; continue; }
+                    if (ch == '>') { in_tag = false; continue; }
+                    if (!in_tag) sb.append_c (ch);
+                }
+                var text = HhcParser.decode_entities (sb.str).strip ();
+                // Collapse internal whitespace runs.
+                var outb = new StringBuilder ();
+                bool ws = false;
+                for (i = 0; i < text.length; i++) {
+                    char ch = text[i];
+                    bool is_ws = ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+                    if (is_ws) {
+                        if (!ws) outb.append_c (' ');
+                    } else {
+                        outb.append_c (ch);
                     }
-                } while (store.iter_next (ref child_iter));
+                    ws = is_ws;
+                }
+                return outb.str.strip ();
             }
-            
-            return item;
+            return "";
         }
 
         public TopicsItem? find_item_by_url (string url) {
@@ -209,99 +325,6 @@ namespace Vchm.Model {
             while (item != null) {
                 item.expanded = true;
                 item = item.parent;
-            }
-        }
-        
-        // Helper functions (copied from CHMFile)
-        static uint32 UINT32_FROM_ARRAY (uint8[] array, int offset) {
-            return (uint32) array[offset] | ((uint32) array[offset + 1] << 8) | 
-                   ((uint32) array[offset + 2] << 16) | ((uint32) array[offset + 3] << 24);
-        }
-        
-        private string? get_item_name (uint8[] topics, uint8[] strings, uint32 index, bool local) {
-            if (local) {
-                if (strings.length <= index) return null;
-                int len = 0;
-                while (index + len < strings.length && strings[index + len] != 0) len++;
-                if (len == 0) return null;
-                var sb = new StringBuilder ();
-                for (int i = 0; i < len; i++) sb.append_c ((char)strings[index + i]);
-                return sb.str;
-            } else {
-                int topic_offset = (int)(index * 16);
-                if (topics.length < topic_offset + 4) return null;
-                
-                uint32 str_offset = UINT32_FROM_ARRAY (topics, topic_offset + 4);
-                int32 test = (int32)str_offset;
-                if (test == -1) return null;
-                if (strings.length <= str_offset) return null;
-                
-                int len = 0;
-                while (str_offset + len < strings.length && strings[str_offset + len] != 0) len++;
-                if (len == 0) return null;
-                
-                var sb = new StringBuilder ();
-                for (int i = 0; i < len; i++) sb.append_c ((char)strings[str_offset + i]);
-                return sb.str;
-            }
-        }
-        
-        private string? get_item_url (uint8[] topics, uint8[] strings, uint8[] urltbl, uint8[] urlstr, uint32 index, bool local) {
-            if (local) {
-                if (strings.length <= index) return null;
-                int len = 0;
-                while (index + len < strings.length && strings[index + len] != 0) len++;
-                if (len == 0) return null;
-                var sb = new StringBuilder ();
-                for (int i = 0; i < len; i++) sb.append_c ((char)strings[index + i]);
-                return null;
-            } else {
-                int topic_offset = (int)(index * 16);
-                if (topics.length < topic_offset + 12) return null;
-                
-                uint32 str_offset = UINT32_FROM_ARRAY (topics, topic_offset + 4);
-                int32 test = (int32)str_offset;
-                if (test == -1) return null;
-                if (strings.length <= str_offset) return null;
-                
-                uint32 urltbl_offset = UINT32_FROM_ARRAY (topics, topic_offset + 8);
-                if (urltbl.length < urltbl_offset + 12) return null;
-                
-                uint32 urlstr_offset = UINT32_FROM_ARRAY (urltbl, (int)urltbl_offset + 8);
-                if (urlstr.length <= urlstr_offset) return null;
-                
-                int url_start = (int)(urlstr_offset + 8);
-                if (urlstr.length <= url_start) return null;
-                
-                int len = 0;
-                while (url_start + len < urlstr.length && urlstr[url_start + len] != 0) len++;
-                if (len == 0) return null;
-                
-                var sb = new StringBuilder ();
-                for (int i = 0; i < len; i++) sb.append_c ((char)urlstr[url_start + i]);
-                string? url = sb.str;
-                
-                if (url != null && !url.has_prefix ("/")) {
-                    url = "/" + url;
-                }
-                
-                return url;
-            }
-        }
-        
-        private class NodeInfo {
-            public uint32 offset;
-            public uint32 flags;
-            public uint32 index;
-            public uint32 next;
-            public uint32 child;
-            
-            public NodeInfo (uint32 offset, uint32 flags, uint32 index, uint32 next, uint32 child) {
-                this.offset = offset;
-                this.flags = flags;
-                this.index = index;
-                this.next = next;
-                this.child = child;
             }
         }
     }

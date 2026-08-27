@@ -12,6 +12,11 @@ namespace Vchm.View {
         private Gtk.ListStore store;
         private Entry filter_entry;
         private ScrolledWindow scrolled;
+        private Label status_label;
+        private string index_loaded_for = "";   // archive basename guard
+        // Guards against programmatic cursor moves (filter re-set,
+        // rebuilds) re-entering the navigate-on-select handler.
+        private bool syncing = false;
 
         public IndexView () {
             Object (orientation: Orientation.VERTICAL);
@@ -68,36 +73,67 @@ namespace Vchm.View {
                 }
             });
 
+            // Navigates when an index entry is selected (single
+            // click — chmindexpanel EVT_LIST_ITEM_SELECTED parity).
             tree_view.cursor_changed.connect (() => {
+                if (syncing) return;
                 TreePath? path;
-                TreeViewColumn? tv_column;
-                tree_view.get_cursor (out path, out tv_column);
-                if (path != null) {
-                    TreeIter iter;
-                    if (store.get_iter (out iter, path)) {
-                        Value val;
-                        store.get_value (iter, 1, out val);
-                        string? url = val.get_string ();
-                        if (url != null && url != "") {
-                            dispatch (new IndexSelectionChangedMessage (url));
-                        }
-                    }
+                TreeViewColumn? col;
+                tree_view.get_cursor (out path, out col);
+                if (path == null) return;
+                TreeIter iter;
+                if (!store.get_iter (out iter, path)) return;
+                Value val;
+                store.get_value (iter, 1, out val);
+                string? url = val.get_string ();
+                if (url != null && url != "") {
+                    dispatch (new IndexSelectionChangedMessage (url));
                 }
             });
 
             scrolled.child = tree_view;
             append (scrolled);
+
+            // Empty-state hint (books without a keyword index).
+            status_label = new Label (null) {
+                wrap = true,
+                margin_top = 12,
+                margin_bottom = 12,
+                margin_start = 12,
+                margin_end = 12,
+                visible = false
+            };
+            status_label.add_css_class ("dim-label");
+            append (status_label);
         }
 
         public void update (AppMessage msg, AppModel model) {
             switch (msg.kind) {
-                case AppMessageKind.OPEN_FILE_DONE: {
-                    rebuild_list (model);
+                case AppMessageKind.OPEN_FILE_DONE:
+                case AppMessageKind.NAVIGATE_DONE: {
+                    var book = model.chm_file.filename ();
+                    if (model.file_open && book != index_loaded_for) {
+                        index_loaded_for = book;
+                        rebuild_list (model);
+                    }
                     break;
                 }
 
                 case AppMessageKind.CLOSE_FILE: {
+                    index_loaded_for = "";
                     store.clear ();
+                    status_label.visible = false;
+                    break;
+                }
+
+                case AppMessageKind.PANELS_REBUILT: {
+                    // Encoding change swaps model.index wholesale while the
+                    // filename stays the same — the filename guard above
+                    // would keep the stale keyword list until the user
+                    // typed (review F9).
+                    if (model.file_open) {
+                        rebuild_list (model);
+                    }
                     break;
                 }
 
@@ -131,21 +167,34 @@ namespace Vchm.View {
             apply_filter (model);
         }
 
+        private void update_status (AppModel model) {
+            if (model.index.entries.size > 0) {
+                status_label.visible = false;
+                status_label.label = "";
+            } else {
+                status_label.label = model.index.error ?? _("Index is empty");
+                status_label.visible = true;
+            }
+        }
+
         private void apply_filter (AppModel model) {
             var filter = model.index.filter_text.down ();
-            // We'll use a TreeModelFilter for proper filtering
-            // For now, just rebuild with filtered entries
+            update_status (model);
+            // Programmatic repopulation + cursor set must not look like
+            // a user selection.
+            syncing = true;
             store.clear ();
             foreach (var entry in model.index.filtered_entries ()) {
                 TreeIter iter;
                 store.append (out iter);
                 store.set (iter, 0, entry.name, 1, entry.url);
             }
-            
+
             if (store.iter_n_children (null) > 0) {
                 var path = new TreePath.first ();
                 tree_view.set_cursor (path, null, false);
             }
+            syncing = false;
         }
 
         private void select_relative (AppModel model, int delta) {

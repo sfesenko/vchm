@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Sergii Fesenko
 
-using Gtk;
 using Gee;
 
 namespace Vchm.Model {
@@ -26,7 +25,6 @@ namespace Vchm.Model {
         public int selected_index { get; set; }
         public bool loading { get; set; }
         public string? error { get; set; }
-        public Gtk.ListStore? list_store { get; private set; }
 
         public IndexModel () {
             entries = new Gee.ArrayList<IndexEntry> ();
@@ -46,53 +44,31 @@ namespace Vchm.Model {
             clear ();
             loading = true;
             error = null;
-            
-Object model;
-            if (chm_file.load_index (out model)) {
-                list_store = model as Gtk.ListStore;
-                
-                if (list_store != null) {
-                    // Convert ListStore to entries for compatibility
-                    TreeIter iter = TreeIter();
-                    if (list_store.get_iter_first (out iter)) {
-                        do {
-                            GLib.Value name_val = new GLib.Value (typeof(string));
-                            GLib.Value url_val = new GLib.Value (typeof(string));
-                            GLib.Value keyword_val = new GLib.Value (typeof(string));
-                            list_store.get_value (iter, 0, out name_val);
-                            list_store.get_value (iter, 1, out url_val);
-                            list_store.get_value (iter, 2, out keyword_val);
-                            string name = name_val.get_string ();
-                            string url = url_val.get_string ();
-                            string keyword = keyword_val.get_string ();
-                            entries.add (new IndexEntry (name, url, keyword));
-                        } while (list_store.iter_next (ref iter));
+
+            // Prefer the binary $WWKeywordLinks/BTree index; fall back
+            // to the .hhk keyword file (see chmfile.vala load_index_entries).
+            Gee.ArrayList<SearchResult> raw;
+            if (chm_file.load_index_entries (out raw)) {
+                foreach (var r in raw) {
+                    if (r.url.length > 0 || filter_text.length == 0) {
+                        entries.add (new IndexEntry (r.title, r.url));
                     }
                 }
+                if (entries.size > 0) {
+                    selected_index = 0;
+                }
+            } else {
+                error = "No index in this archive";
             }
-            
+
             loading = false;
         }
 
         // Helper function for case-insensitive string comparison (ASCII only)
     private static bool contains_ci (string haystack, string needle) {
-        // Simple ASCII case-insensitive comparison
-        var h = ascii_lower (haystack);
-        var n = ascii_lower (needle);
-        return h.contains (n);
-    }
-
-    private static string ascii_lower (string s) {
-        var sb = new StringBuilder ();
-        for (int i = 0; i < s.length; i++) {
-            unichar c = s[i];
-            if (c >= 'A' && c <= 'Z') {
-                sb.append_c ((char)(c + 32));
-            } else {
-                sb.append_c ((char)c);
-            }
-        }
-        return sb.str;
+        // UTF-8 aware: down() uses g_utf8_strdown, so Ukrainian/Greek/etc.
+        // filter text matches too.
+        return haystack.down ().contains (needle.down ());
     }
 
     public Gee.ArrayList<IndexEntry> filtered_entries () {
