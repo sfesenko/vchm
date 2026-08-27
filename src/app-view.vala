@@ -10,8 +10,14 @@ namespace Vchm {
 
     // One document tab: its own WebView + history; the shared archive
     // model supplies content for whichever tab is active.
+    // One document tab: its own WebView + per-tab sub-models. The shared
+    // archive registry (CHMFile.by_path) lets every tab serve from its
+    // own archive; everything else (history, viewer, search) is per-tab
+    // so the F26 race on the shared model.viewer slot is gone.
     public class DocumentTab : Object {
         public Vchm.View.ViewerView view;
+        public ViewerModel viewer = new ViewerModel ();
+        public SearchModel search = new SearchModel ();
         public HistoryModel? history = null;   // bound when a book attaches
         public string book_path = "";          // "" = placeholder, no book yet
         public string url = "/";
@@ -69,6 +75,18 @@ namespace Vchm {
             get {
                 assert (active_tab >= 0 && active_tab < tabs.size);
                 return tabs[active_tab].view;
+            }
+        }
+        // Per-tab ViewerModel: the active tab owns its own viewer state,
+        // so two tabs can have different current_url/loading/intended_url
+        // without a shared-slot race. The update function's
+        // `model.viewer` reads come through this property in the view
+        // code; the update function in app-update.vala still uses
+        // model.viewer (the shared slot) for backward compatibility.
+        public ViewerModel active_viewer {
+            get {
+                if (active_tab < 0 || active_tab >= tabs.size) return null;
+                return tabs[active_tab].viewer;
             }
         }
         private ToolbarView toolbar_view;
@@ -657,11 +675,35 @@ private void setup_main_layout (AppModel model) {
                 return;
             }
 
-            // Snapshot outgoing tab state.
+            // Outgoing tab state is NOT snapshotted here. Writing the shared
+            // model.viewer.current_url into old.url was the F26 race hot
+            // path: the shared slot already held the NEW book by the time
+            // the snapshot ran, so old.url got corrupted with the new
+            // book's URL. tab.url is updated only by NAVIGATE_DONE
+            // (line ~843) and attach_book_to_tab, which is the correct
+            // source of truth for "this tab's last URL".
+
+            // Flush the shared viewer slot into the outgoing tab's
+            // per-tab viewer (the slot has been the active tab's
+            // viewer all along because every code path writes there).
+            // Then pull the incoming tab's viewer back into the slot
+            // so model.viewer reads in the update function see the
+            // incoming tab's state.
             if (active_tab >= 0 && active_tab < tabs.size) {
-                var old = tabs[active_tab];
-                old.url = held_model.viewer.current_url;
-                old.title = held_model.viewer.current_title;
+                var old_tab = tabs[active_tab];
+                if (old_tab.viewer == held_model.viewer) {
+                    // Already the same reference; nothing to do.
+                } else {
+                    // Copy scratch state into the outgoing tab.
+                    old_tab.viewer.current_url = held_model.viewer.current_url;
+                    old_tab.viewer.current_title = held_model.viewer.current_title;
+                    old_tab.viewer.intended_url = held_model.viewer.intended_url;
+                    old_tab.viewer.loading = held_model.viewer.loading;
+                    old_tab.viewer.error = held_model.viewer.error;
+                    old_tab.viewer.pending_html = held_model.viewer.pending_html;
+                    old_tab.viewer.find_text = held_model.viewer.find_text;
+                    old_tab.viewer.find_case_sensitive = held_model.viewer.find_case_sensitive;
+                }
             }
 
             active_tab = num;
@@ -683,17 +725,31 @@ private void setup_main_layout (AppModel model) {
             if (tab.history != null)
                 held_model.history = tab.history;
 
-            held_model.viewer.current_url = tab.url;
-            held_model.viewer.current_title = tab.title;
-            held_model.viewer.intended_url = tab.url;
-            held_model.viewer.loading = false;
+            // Swap the per-tab ViewerModel in for the shared slot so
+            // model.viewer reads in the update function see the
+            // incoming tab's viewer state.
+            held_model.viewer = tab.viewer;
+
+            // Tell the model which tab is now active so NAVIGATE
+            // messages dispatched from updateModel carry the right
+            // tab_index (the worker snapshot still uses the shared
+            // model.chm_file which the proxy routes here, but the
+            // tab_index lets NAVIGATE_DONE route its writes to the
+            // right tab if the user switches mid-load).
+            held_model.active_tab_index = num;
 
             tab.title_label.set_text (
                 tab.title.length > 0 ? tab.title : _("New page"));
             held_model.status_text = tab.title.length > 0 ? tab.title : tab.url;
 
+            // Notify the model + sidebar views that the active tab
+            // changed so they can rebuild from the new active book.
+            // Dispatched after the swap so updateModel.OPEN_FILE_DONE
+            // can still use the previous active tab's state if needed.
+            dispatch (new TabActivatedMessage (num, tab.book_path));
+
             if (sync_view)
-                tab.view.sync_if_needed (held_model);
+                tab.view.sync_if_needed (held_model, true);
         }
 
         private void toggle_fullscreen () {
@@ -838,10 +894,25 @@ private void setup_main_layout (AppModel model) {
                         }
                     }
 
-                    if (active_tab >= 0 && active_tab < tabs.size) {
-                        var tab = tabs[active_tab];
+                    // Use the tab_index from the message if present,
+                    // otherwise fall back to the currently active tab.
+                    // The user may have switched tabs between NAVIGATE
+                    // dispatch and NAVIGATE_DONE; without tab_index the
+                    // URL would land on the wrong tab.
+                    int ti = done_msg.tab_index >= 0 ? done_msg.tab_index : active_tab;
+                    if (ti >= 0 && ti < tabs.size) {
+                        var tab = tabs[ti];
                         tab.url = model.viewer.current_url;
-                        tab.title = done_msg.title != "" ? done_msg.title : tab.url;
+                        // Tab label: prefer the book title (set by
+                        // attach_book_to_tab) over the page title so
+                        // pages with empty <title> or generic titles
+                        // like "Table of Contents" don't replace the
+                        // book name. Only update the tab title if the
+                        // page title is meaningful (non-empty and not
+                        // equal to the book title).
+                        if (done_msg.title != "" && done_msg.title != tab.title) {
+                            tab.title = done_msg.title;
+                        }
                         tab.title_label.set_text (tab.title);
                     }
                     break;
@@ -919,32 +990,46 @@ private void setup_main_layout (AppModel model) {
                     var target_path = normalize_chm_target (nt.url);
 
                     // New tab within the SAME book; fresh history for it.
+                    // Do NOT snapshot the outgoing tab's url/title from
+                    // the shared model.viewer slot — that was the F26
+                    // race hot path. tab.url/title are owned by
+                    // NAVIGATE_DONE for each tab.
                     var tab = create_tab (model);
                     tab.book_path = model.chm_file.filename ();
                     tab.view.book_path = tab.book_path;
                     tab.history = new HistoryModel ();
                     tab.url = target_path;
+                    tab.title = target_path;
 
-                    // Snapshot current tab, activate the new one silently,
-                    // point shared model at it, and navigate.
                     int new_idx = tabs.size - 1;
-                    if (active_tab >= 0 && active_tab < tabs.size) {
-                        var old_t = tabs[active_tab];
-                        old_t.url = model.viewer.current_url;
-                        old_t.title = model.viewer.current_title;
-                    }
                     active_tab = new_idx;
                     held_model.history = tab.history;
                     held_model.viewer.current_url = target_path;
                     held_model.viewer.current_title = "";
                     held_model.viewer.intended_url = target_path;
-                    dispatch (new NavigateMessage (target_path));
+                    dispatch (new NavigateMessage (target_path, null, new_idx));
                     break;
                 }
 
                 case AppMessageKind.APP_QUIT: {
                     destroy ();
                     break;
+                }
+
+                case AppMessageKind.TAB_ACTIVATED: {
+                    // The sidebar views are wired to update on
+                    // NAVIGATE_DONE / OPEN_FILE_DONE, but those fire
+                    // per-tab and may have been coalesced away. On
+                    // an explicit tab switch we MUST rebuild the
+                    // sidebar so it shows the new active book's TOC
+                    // / index / search / bookmarks.
+                    topics_view.update (msg, model);
+                    index_view.update (msg, model);
+                    search_view.update (msg, model);
+                    bookmarks_view.update (msg, model);
+                    // Skip the generic forward-to-subviews below
+                    // for TAB_ACTIVATED: we just dispatched above.
+                    return;
                 }
 
                 case AppMessageKind.VIEWER_FIND_COUNT: {

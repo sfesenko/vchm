@@ -282,12 +282,15 @@ namespace Vchm.View {
         }
 
         // Load when the model's current URL differs from what we show.
-        // Called from update() and on tab activation.
-        public void sync_if_needed (AppModel model) {
+        // Called from update() and on tab activation. The `force` flag
+        // bypasses the cache-skip and always reloads — needed when a
+        // tab is re-shown after being hidden, because WebKit may have
+        // unloaded the page contents while the tab was off-screen.
+        public void sync_if_needed (AppModel model, bool force = false) {
             var cur = model.viewer.current_url;
             var book = GLib.Path.get_basename (model.chm_file.filename ());
             if (model.file_open && cur.length > 0 &&
-                (cur != loaded_url || book != loaded_book)) {
+                (force || cur != loaded_url || book != loaded_book)) {
                 loaded_url = cur;
                 loaded_book = book;
                 load_uri (page_uri (cur));

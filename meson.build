@@ -160,6 +160,13 @@ if get_option('enable_render_test')
     join_paths(meson.current_build_dir (), 'tests', 'book_cp1251.chm'),
     join_paths(meson.current_build_dir (), 'tests', 'book_koi8u.chm'),
   ]
+  # Optional 4th fixture: a real multi-chapter CP1251 book from the
+  # developer's library. Skipped if not present so the test stays
+  # hermetic on a fresh checkout.
+  arch_book = '***REMOVED***//Documents/Books/<redacted>.chm'
+  if run_command('test', '-f', arch_book, check: false).returncode() == 0
+    render_fixtures += [arch_book]
+  endif
   test('test render smoke', vchm,
     args: [smoke_render, vchm] + render_fixtures,
     env: [

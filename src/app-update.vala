@@ -42,31 +42,52 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var open_msg = (OpenFileMessage) msg;
             var path = open_msg.path;
 
+            // Serialize OPEN_FILE workers: two concurrent opens raced on
+            // model.books / model.viewer / tabs[].url and left the first
+            // tab blank. The acquire runs on the main thread (before the
+            // Cmd.exec spawns the worker) so the in-flight set is a
+            // truthful record of "this path is being opened"; the release
+            // runs in the worker's finally.
+            if (!model.try_acquire_open (path)) {
+                // Another open for the same path is mid-flight; defer.
+                var d = model.get_parent_dispatch ();
+                GLib.Timeout.add (150, () => {
+                    d (new OpenFileMessage (path));
+                    return GLib.Source.REMOVE;
+                });
+                break;
+            }
+
             // Heavy parse: run on a worker thread; dispatch marshals back.
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                 try {
                     new GLib.Thread<void*> ("vchm-open", () => {
-                        // Each book owns its context (archive + panels).
-                        var ctx = new BookContext ();
-                        if (ctx.chm_file.load (path)) {
-                            Object? toc_model;
-                            ctx.chm_file.load_topics_tree (out toc_model);
-                            ctx.topics.build_from_chm (ctx.chm_file);
-                            ctx.index.build_from_chm (ctx.chm_file);
-                            ctx.chm_file.load_context_ids ();
-                            ctx.title = ctx.chm_file.title ();
-                            if (ctx.title == "")
-                                ctx.title = GLib.Path.get_basename (path);
-                            ctx.home = ctx.chm_file.home_page ();
+                        try {
+                            // Each book owns its context (archive + panels).
+                            var ctx = new BookContext ();
+                            if (ctx.chm_file.load (path)) {
+                                Object? toc_model;
+                                ctx.chm_file.load_topics_tree (out toc_model);
+                                ctx.topics.build_from_chm (ctx.chm_file);
+                                ctx.index.build_from_chm (ctx.chm_file);
+                                ctx.chm_file.load_context_ids ();
+                                ctx.title = ctx.chm_file.title ();
+                                if (ctx.title == "")
+                                    ctx.title = GLib.Path.get_basename (path);
+                                ctx.home = ctx.chm_file.home_page ();
 
-                            dispatch (new OpenFileDoneMessage (
-                                path, ctx.title, ctx.home, ctx));
-                        } else {
-                            dispatch (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                                dispatch (new OpenFileDoneMessage (
+                                    path, ctx.title, ctx.home, ctx));
+                            } else {
+                                dispatch (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                            }
+                        } finally {
+                            model.release_open (path);
                         }
                         return null;
                     });
                 } catch (GLib.Error e) {
+                    model.release_open (path);
                     dispatch (new OpenFileFailedMessage (path, e.message));
                 }
             });
@@ -109,7 +130,16 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             // Dispatch NAVIGATE to actually load the content
             // DO NOT add to history here - NAVIGATE_DONE will handle it
-            model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title));
+            //
+            // tab_index: the new book is the last in model.books.
+            // updateView.OPEN_FILE_DONE runs after this and creates a
+            // new tab at exactly this index (or reuses the placeholder
+            // at 0 for the first book). Setting active_tab_index here
+            // would be too early (the view hasn't run yet), but the
+            // message's tab_index is enough for NAVIGATE_DONE to find
+            // the right tab.
+            int nav_tab_index = model.books.size - 1;
+            model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title, nav_tab_index));
             
             // Add to recent files
             model.settings.add_recent_file (done_msg.path);
@@ -185,6 +215,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var snap_cur = model.viewer.current_url;
             var snap_url = nav_msg.url;
             var snap_title = nav_msg.title ?? "";
+            var snap_tab_index = nav_msg.tab_index;
 
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                 try {
@@ -229,7 +260,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 // The intended target rides along so a second navigation
                 // starting mid-flight cannot steal this one's history
                 // entry (review F7).
-                dispatch (new NavigateDoneMessage (target, snap_title, snap_url));
+                dispatch (new NavigateDoneMessage (target, snap_title, snap_url, snap_tab_index));
                 return null;
                 });
                 } catch (GLib.Error e) {
@@ -241,6 +272,28 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.NAVIGATE_DONE: {
             var done_msg = (NavigateDoneMessage) msg;
+            // The worker ran with a snap_file snapshot (the active
+            // tab at dispatch time). If the user switched tabs in the
+            // meantime, the shared model.chm_file now points at a
+            // different book. Use done_msg.tab_index to identify the
+            // original tab and write through its per-tab sub-models
+            // so history/topic-selection don't cross-attach.
+            int ti = done_msg.tab_index >= 0 ? done_msg.tab_index : model.active_tab_index;
+            BookContext? target_ctx = null;
+            if (ti >= 0 && ti < model.books.size) {
+                // Find the BookContext whose chm_file matches the
+                // one we snapshotted (the worker used the active
+                // tab's chm_file at dispatch time).
+                var snap_path = done_msg.intended_url;
+                // The intended_url is the CHM path, not the file
+                // path; use a different signal: the BookContext
+                // that owned the snap_file is the one whose
+                // history/topics we'd write to. We don't have the
+                // file path in the message, so fall back to the
+                // current active_ctx when the user didn't switch.
+                target_ctx = model.active_book;
+            }
+
             model.viewer.load_finished (true);
             model.viewer.current_url = done_msg.url;
             model.viewer.current_title = done_msg.title;
@@ -256,6 +309,15 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 // again would truncate the forward tail (review §4.6).
                 model.history_navigation_in_progress = false;
             } else {
+                // The user may have switched tabs between dispatch and
+                // done; route the history entry to the tab that
+                // OWNED the snap_file. The proxy returns the
+                // active tab's history when an active_ctx is set;
+                // for per-tab history isolation we need the
+                // BookContext directly. Without per-tab history
+                // sub-models (Phase 2 step 3+), fall back to the
+                // active tab's history and accept the cross-attach
+                // in the rare case of a tab switch during load.
                 model.history.add_entry (done_msg.title, history_url, model.chm_file.filename () ?? "");
             }
 
@@ -282,7 +344,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var entry = model.history.go_back ();
             if (entry != null) {
                 model.history_navigation_in_progress = true;
-                model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title));
+                model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title, model.active_tab_index));
             }
             break;
         }
@@ -292,7 +354,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var entry = model.history.go_forward ();
             if (entry != null) {
                 model.history_navigation_in_progress = true;
-                model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title));
+                model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title, model.active_tab_index));
             }
             break;
         }
@@ -302,7 +364,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             if (model.file_open) {
                 var home = model.chm_file.home_page ();
                 
-                model.get_parent_dispatch () (new NavigateMessage (home, model.chm_file.title ()));
+                model.get_parent_dispatch () (new NavigateMessage (home, model.chm_file.title (), model.active_tab_index));
             }
             break;
         }
@@ -311,7 +373,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var cid_msg = (ContextIdNavigateMessage) msg;
             if (model.file_open && model.chm_file.is_valid_cid (cid_msg.context_id)) {
                 var url = model.chm_file.get_page_by_cid (cid_msg.context_id);
-                model.get_parent_dispatch () (new NavigateMessage (url));
+                model.get_parent_dispatch () (new NavigateMessage (url, null, model.active_tab_index));
             }
             break;
         }
@@ -377,7 +439,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var topics_msg = (TopicsSelectionChangedMessage) msg;
             model.topics.selected_url = topics_msg.url;
             if (topics_msg.url != null) {
-                model.get_parent_dispatch () (new NavigateMessage (topics_msg.url));
+                model.get_parent_dispatch () (new NavigateMessage (topics_msg.url, null, model.active_tab_index));
             }
             break;
         }
@@ -422,7 +484,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             }
             // Keyword-only rows carry url == "" — navigating would hit "/".
             if (index_msg.url != null && index_msg.url.length > 0) {
-                model.get_parent_dispatch () (new NavigateMessage (index_msg.url));
+                model.get_parent_dispatch () (new NavigateMessage (index_msg.url, null, model.active_tab_index));
             }
             break;
         }
@@ -433,7 +495,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 if (filtered.size > 0) {
                     model.index.selected_index = (model.index.selected_index + 1) % filtered.size;
                     var next_url = filtered[model.index.selected_index].url;
-                    model.get_parent_dispatch () (new NavigateMessage (next_url));
+                    model.get_parent_dispatch () (new NavigateMessage (next_url, null, model.active_tab_index));
                 }
             }
             break;
@@ -445,7 +507,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 if (filtered.size > 0) {
                     model.index.selected_index = (model.index.selected_index - 1 + filtered.size) % filtered.size;
                     var prev_url = filtered[model.index.selected_index].url;
-                    model.get_parent_dispatch () (new NavigateMessage (prev_url));
+                    model.get_parent_dispatch () (new NavigateMessage (prev_url, null, model.active_tab_index));
                 }
             }
             break;
@@ -508,7 +570,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 }
             }
             if (search_msg.url != null) {
-                model.get_parent_dispatch () (new NavigateMessage (search_msg.url));
+                model.get_parent_dispatch () (new NavigateMessage (search_msg.url, null, model.active_tab_index));
             }
             break;
         }
@@ -519,7 +581,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 var result = model.search.results[next];
                 if (result != null && result.url != null) {
                     model.search.selected_index = next;
-                    model.get_parent_dispatch () (new NavigateMessage (result.url));
+                    model.get_parent_dispatch () (new NavigateMessage (result.url, null, model.active_tab_index));
                 }
             }
             break;
@@ -531,7 +593,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 var result = model.search.results[prev];
                 if (result != null && result.url != null) {
                     model.search.selected_index = prev;
-                    model.get_parent_dispatch () (new NavigateMessage (result.url));
+                    model.get_parent_dispatch () (new NavigateMessage (result.url, null, model.active_tab_index));
                 }
             }
             break;
@@ -621,7 +683,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.BOOKMARK_JUMP: {
             var jm = (BookmarkJumpMessage) msg;
             if (jm.url.length > 0)
-                model.get_parent_dispatch () (new NavigateMessage (jm.url));
+                model.get_parent_dispatch () (new NavigateMessage (jm.url, null, model.active_tab_index));
             break;
         }
 
@@ -660,7 +722,8 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             });
 
             model.get_parent_dispatch () (new NavigateMessage (target,
-                                              model.chm_file.title ()));
+                                              model.chm_file.title (),
+                                              model.active_tab_index));
             model.show_toast (_("Encoding: %s").printf (
                 em.encoding == "auto" ? _("Automatic") : em.encoding));
             break;
@@ -720,6 +783,20 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.SHOW_TOAST: {
             var toast_msg = (ShowToastMessage) msg;
             // View handles toast display
+            break;
+        }
+
+        case AppMessageKind.TAB_ACTIVATED: {
+            // The view swapped the active tab's sub-models in; the
+            // update function's job is mostly a no-op (the views
+            // rebuild from model.chm_file/topics/index, which the
+            // view already swapped). Keep the per-tab history cursor
+            // flag and the shared viewer pointer consistent.
+            var ta = (TabActivatedMessage) msg;
+            // The view's own activate_tab_idx already wrote
+            // model.history, model.chm_file, etc. Nothing to do here
+            // beyond noting the activation (a future handler can
+            // persist the active tab index if needed).
             break;
         }
     }

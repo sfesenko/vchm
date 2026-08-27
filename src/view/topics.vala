@@ -107,6 +107,17 @@ namespace Vchm.View {
                     break;
                 }
 
+                case AppMessageKind.TAB_ACTIVATED: {
+                    // The view swapped model.topics to the new active
+                    // tab's tree. Force a rebuild even if the root
+                    // instance happened to be reused (e.g. two tabs
+                    // for the same book via OPEN_IN_NEW_TAB).
+                    built_root = null;
+                    rebuild_tree (model);
+                    select_url (model.topics.selected_url);
+                    break;
+                }
+
                 case AppMessageKind.TOPICS_SELECTION_CHANGED: {
                     // Selection initiated here already moved the cursor.
                     break;

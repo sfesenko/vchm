@@ -60,6 +60,14 @@ test_elmish = executable('test_elmish',
 )
 test('test elmish core', test_elmish)
 
+# OPEN_FILE serialization (F26 follow-up): exercises the model-side
+# try_acquire/release path without spinning up GTK.
+test_serial = executable('test_serial',
+  'test_serial.vala',
+  dependencies: [test_deps, lib_core_dep],
+)
+test('test open serial', test_serial, env: test_env)
+
 # Parser/model unit tests over generated fixtures (GTK-free).
 test_parsers = executable('test_parsers',
   'test_parsers.vala',

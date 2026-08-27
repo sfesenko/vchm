@@ -78,6 +78,17 @@ namespace Vchm.View {
                     }
                     break;
                 }
+
+                case AppMessageKind.TAB_ACTIVATED: {
+                    // New active tab: refresh the bookmark list (it is
+                    // keyed by archive filename).
+                    populated_for = "";   // bypass the guard
+                    repopulate ();
+                    populated_for = model.chm_file.is_open ()
+                        ? model.chm_file.filename () : "";
+                    break;
+                }
+
                 default:
                     break;
             }

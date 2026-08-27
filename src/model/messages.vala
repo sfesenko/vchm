@@ -73,6 +73,9 @@ namespace Vchm.Model {
         BOOKMARKS_CHANGED,
         OPEN_IN_NEW_TAB,
 
+        // Tab lifecycle
+        TAB_ACTIVATED,
+
         // Window
         WINDOW_STATE_CHANGED,
         WINDOW_MAXIMIZED_CHANGED,
@@ -142,9 +145,16 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.NAVIGATE; } }
         public string url { get; private set; }
         public string? title { get; private set; }
-        public NavigateMessage (string url, string? title = null) {
+        // Which tab this navigation belongs to. The worker runs off
+        // the main thread; without tab_index the NAVIGATE_DONE
+        // handler writes to whichever tab is currently active in
+        // the shared model, which may be a different one if the user
+        // switched tabs mid-load (F26 follow-up).
+        public int tab_index { get; private set; }
+        public NavigateMessage (string url, string? title = null, int tab_index = -1) {
             this.url = url;
             this.title = title;
+            this.tab_index = tab_index;
         }
     }
 
@@ -156,10 +166,12 @@ namespace Vchm.Model {
         // model.intended_url slot races when a second navigation starts
         // before the first worker reports back (review F7).
         public string intended_url { get; private set; }
-        public NavigateDoneMessage (string url, string title, string? intended_url = null) {
+        public int tab_index { get; private set; }
+        public NavigateDoneMessage (string url, string title, string? intended_url = null, int tab_index = -1) {
             this.url = url;
             this.title = title;
             this.intended_url = intended_url ?? url;
+            this.tab_index = tab_index;
         }
     }
 
@@ -377,6 +389,16 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.OPEN_IN_NEW_TAB; } }
         public string url { get; private set; }
         public OpenInNewTabMessage (string url) { this.url = url; }
+    }
+
+    public class TabActivatedMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.TAB_ACTIVATED; } }
+        public int tab_index { get; private set; }
+        public string book_path { get; private set; }
+        public TabActivatedMessage (int tab_index, string book_path) {
+            this.tab_index = tab_index;
+            this.book_path = book_path;
+        }
     }
 
     public class SetEncodingMessage : AppMessage {

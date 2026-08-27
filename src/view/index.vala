@@ -119,6 +119,18 @@ namespace Vchm.View {
                     break;
                 }
 
+                case AppMessageKind.TAB_ACTIVATED: {
+                    // Force a rebuild even if the active book hasn't
+                    // changed (e.g. OPEN_IN_NEW_TAB opened a second
+                    // tab for the same book, then user switched).
+                    if (model.file_open) {
+                        index_loaded_for = "";   // bypass the guard
+                        rebuild_list (model);
+                        index_loaded_for = model.chm_file.filename ();
+                    }
+                    break;
+                }
+
                 case AppMessageKind.CLOSE_FILE: {
                     index_loaded_for = "";
                     store.clear ();

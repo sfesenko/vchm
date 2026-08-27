@@ -169,6 +169,17 @@ namespace Vchm.View {
                     break;
                 }
 
+                case AppMessageKind.TAB_ACTIVATED: {
+                    // New active tab: drop the old results, show the
+                    // new tab's search model (which is empty until the
+                    // user runs a new search).
+                    populating = true;
+                    query_entry.text = model.search.query;
+                    populating = false;
+                    rebuild_results (model);
+                    break;
+                }
+
                 case AppMessageKind.SEARCH_EXECUTE: {
                     // Triggered by button or Enter
                     break;
