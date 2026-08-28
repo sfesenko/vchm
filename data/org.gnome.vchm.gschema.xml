@@ -66,5 +66,10 @@
       <default>''</default>
       <summary>Last opened directory</summary>
     </key>
+    <key name="per-book-rows" type="as">
+      <default>[]</default>
+      <summary>Per-book state</summary>
+      <description>Per-entry: archive-path, unit separator, last-url, unit separator, font-size, unit separator, scroll-y.</description>
+    </key>
   </schema>
 </schemalist>

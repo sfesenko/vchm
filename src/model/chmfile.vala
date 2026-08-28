@@ -461,9 +461,11 @@ namespace Vchm.Model {
                         if (f != null && f.length > 0 && !_encoding_hinted) {
                             int comma = f.last_index_of_char (',');
                             if (comma >= 0 && comma + 1 < f.length) {
-                                int cs = int.parse (f.substring (comma + 1).strip ());
-                                _encoding = encoding_from_charset (cs);
-                                _encoding_hinted = true;
+                                int cs = 0;
+                                if (int.try_parse (f.substring (comma + 1).strip (), out cs)) {
+                                    _encoding = encoding_from_charset (cs);
+                                    _encoding_hinted = true;
+                                }
                             }
                         }
                         break;
@@ -1133,8 +1135,10 @@ namespace Vchm.Model {
         // its position. Dropping this OR halved every non-small value and
         // made doc-index deltas point at wrong #TOPICS entries (0 search
         // results on real $FIftiMain books).
-        if (count > 0)
+        if (count > 0) {
+            if (n_bits >= 64) return uint64.MAX;
             ret |= (uint64) 1 << n_bits;
+        }
         return ret;
     }
 
@@ -1167,9 +1171,19 @@ namespace Vchm.Model {
         if (pos == 0) {
             word = decoded;
         } else {
-            int keep = pos < word.length ? pos : word.length;
-            // Prefix reuse counts characters of the DECODED word.
-            word = word.substring (0, keep) + decoded;
+            // Prefix reuse pos counts characters of the DECODED word.
+            // word.substring expects byte offset; Cyrillic decoded words
+            // are 2 bytes/char, so convert char count to bytes.
+            int w_chars = (int) word.char_count ();
+            int keep_chars = pos < w_chars ? pos : w_chars;
+            int keep_bytes = 0;
+            int off = 0;
+            for (int i = 0; i < keep_chars; i++) {
+                unichar c;
+                word.get_next_char (ref off, out c);
+                keep_bytes = off;
+            }
+            word = word.substring (0, keep_bytes) + decoded;
         }
     }
 
@@ -1206,7 +1220,7 @@ namespace Vchm.Model {
                 fts_word (buffer, (int) i + 2, word_len - 1, pos, enc, ref word);
 
                 if (text.down () <= word.down ()) {
-                    if (i + word_len + 1 + 4 <= buf_size) {
+                    if (i + word_len + 1 + 4 <= usable) {
                         initial_offset = UINT32_FROM_ARRAY (buffer, (int)(i + word_len + 1));
                     }
                     break;
@@ -2008,27 +2022,28 @@ static int char_index_at_or_after (int[] starts, int byte_off) {
 
 // Single source of truth for extension→MIME mapping.
         public static string mime_for_path (string path) {
-            if (path.has_suffix (".html") || path.has_suffix (".htm"))
+            string low = path.down ();
+            if (low.has_suffix (".html") || low.has_suffix (".htm"))
                 return "text/html";
-            else if (path.has_suffix (".css"))
+            else if (low.has_suffix (".css"))
                 return "text/css";
-            else if (path.has_suffix (".js"))
+            else if (low.has_suffix (".js"))
                 return "application/javascript";
-            else if (path.has_suffix (".png"))
+            else if (low.has_suffix (".png"))
                 return "image/png";
-            else if (path.has_suffix (".jpg") || path.has_suffix (".jpeg"))
+            else if (low.has_suffix (".jpg") || low.has_suffix (".jpeg"))
                 return "image/jpeg";
-            else if (path.has_suffix (".gif"))
+            else if (low.has_suffix (".gif"))
                 return "image/gif";
-            else if (path.has_suffix (".svg"))
+            else if (low.has_suffix (".svg"))
                 return "image/svg+xml";
-            else if (path.has_suffix (".ico"))
+            else if (low.has_suffix (".ico"))
                 return "image/x-icon";
-            else if (path.has_suffix (".pdf"))
+            else if (low.has_suffix (".pdf"))
                 return "application/pdf";
-            else if (path.has_suffix (".txt"))
+            else if (low.has_suffix (".txt"))
                 return "text/plain";
-            else if (path.has_suffix (".xml"))
+            else if (low.has_suffix (".xml"))
                 return "application/xml";
             else
                 return "application/octet-stream";

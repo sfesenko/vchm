@@ -103,6 +103,11 @@ namespace Vchm {
         // Guards against notify->dispatch->set->notify feedback loops.
         private bool sash_updating = false;
 
+        // Recent files menus (header popover + File submenu)
+        private Gtk.MenuButton header_recent_button;
+        private GLib.Menu header_recent_menu;
+        private GLib.Menu file_recent_submenu;
+
         // Find bar
         private Revealer find_revealer;
         private Entry find_entry;
@@ -176,6 +181,12 @@ namespace Vchm {
                 sync_panel_actions (held_model);
             });
             add_action (act_search);
+
+            var open_recent = new GLib.SimpleAction ("open-recent", GLib.VariantType.STRING);
+            open_recent.activate.connect ((parameter) => {
+                if (parameter != null) open_file_or_activate (parameter.get_string ());
+            });
+            add_action (open_recent);
 
             var set_encoding = new GLib.SimpleAction.stateful (
                 ACTION_SET_ENCODING, GLib.VariantType.STRING, "auto");
@@ -254,6 +265,16 @@ namespace Vchm {
                 show_title_buttons = true,
             };
             
+            // Recent files popover button (header, quick access)
+            header_recent_menu = new GLib.Menu ();
+            rebuild_header_recent_menu (model);
+            header_recent_button = new Gtk.MenuButton () {
+                icon_name = "document-open-recent-symbolic",
+                tooltip_text = _("Recent files"),
+                menu_model = header_recent_menu,
+            };
+            header.pack_start (header_recent_button);
+
             // Add menu button
             var menu_button = new MenuButton () {
                 icon_name = "open-menu-symbolic",
@@ -268,6 +289,40 @@ namespace Vchm {
             
             set_titlebar (header);
         }
+
+        private void rebuild_header_recent_menu (AppModel model) {
+            header_recent_menu.remove_all ();
+            if (model.settings.recent_files.length == 0) {
+                header_recent_menu.append (_("No recent files"), "win.noop");
+                return;
+            }
+            foreach (var f in model.settings.recent_files) {
+                string base_name = GLib.Path.get_basename (f);
+                // Action with string parameter
+                string action = "win.open-recent::" + f;
+                header_recent_menu.append (base_name, action);
+            }
+        }
+
+        private void rebuild_file_recent_menu () {
+            if (file_recent_submenu == null) return;
+            file_recent_submenu.remove_all ();
+            if (held_model == null || held_model.settings.recent_files.length == 0) {
+                file_recent_submenu.append (_("No recent files"), "win.noop");
+                return;
+            }
+            foreach (var f in held_model.settings.recent_files) {
+                string base_name = GLib.Path.get_basename (f);
+                string action = "win.open-recent::" + f;
+                file_recent_submenu.append (base_name, action);
+            }
+        }
+
+        private void refresh_recent_menus () {
+            if (held_model == null) return;
+            rebuild_header_recent_menu (held_model);
+            rebuild_file_recent_menu ();
+        }
         
         private GLib.Menu create_app_menu () {
             var menu = new GLib.Menu ();
@@ -275,6 +330,10 @@ namespace Vchm {
             // File section
             var file_section = new GLib.Menu ();
             file_section.append (_("Open..."), "win.open");
+            // Recent files submenu (File → Recent Files)
+            file_recent_submenu = new GLib.Menu ();
+            rebuild_file_recent_menu ();
+            file_section.append_submenu (_("Recent Files"), file_recent_submenu);
             file_section.append (_("Print..."), "win.print");
             file_section.append (_("Close"), "win.close");
             file_section.append (_("Quit"), "win.quit");
@@ -353,9 +412,55 @@ private void setup_main_layout (AppModel model) {
 
                 tabs.remove_at (from);
                 tabs.insert ((int) page_num, moved);
+                // Keep model.books in sync with visual tabs so
+                // tab_index == book_index (strict single-tab-per-file).
+                // Placeholder tabs (book_path=="") have no BookContext.
+                if (held_model != null && held_model.books.size == tabs.size) {
+                    // Only when every tab is bound (no placeholder) we can
+                    // mirror exactly; otherwise rebuild books order from tabs.
+                    var reordered = new Gee.ArrayList<BookContext> ();
+                    foreach (var t in tabs) {
+                        if (t.book_path == "") continue;
+                        var bk = CHMFile.by_path (t.book_path);
+                        foreach (var b in held_model.books) {
+                            if (b.chm_file == bk) { reordered.add (b); break; }
+                        }
+                    }
+                    // If we matched all books, replace order
+                    if (reordered.size == held_model.books.size) {
+                        held_model.books.clear ();
+                        foreach (var b in reordered) held_model.books.add (b);
+                    }
+                } else if (held_model != null) {
+                    // Fallback: reorder by correlating moved tab's book
+                    // when books/tabs differ by placeholder.
+                    string moved_path = moved.book_path;
+                    if (moved_path != "") {
+                        BookContext? moved_ctx = null;
+                        int from_b = -1;
+                        for (int i = 0; i < held_model.books.size; i++) {
+                            if (held_model.books[i].chm_file.filename () == moved_path) {
+                                moved_ctx = held_model.books[i]; from_b = i; break;
+                            }
+                        }
+                        if (moved_ctx != null && from_b >= 0) {
+                            held_model.books.remove_at (from_b);
+                            // Compute insertion index: count bound tabs before page_num
+                            int to_b = 0;
+                            for (int i = 0; i < (int) page_num; i++) {
+                                if (tabs[i].book_path != "") to_b++;
+                            }
+                            // also handle moving forward vs backward
+                            if (to_b > held_model.books.size) to_b = held_model.books.size;
+                            held_model.books.insert (to_b, moved_ctx);
+                        }
+                    }
+                }
 
                 if (was_active != null)
                     active_tab = tabs.index_of (was_active);
+                // Update model's active_tab_index to track visual reorder
+                if (held_model != null) held_model.active_tab_index = active_tab;
             });
             
             statusbar_view = new StatusBarView ();
@@ -512,7 +617,7 @@ private void setup_main_layout (AppModel model) {
                     if (chosen == null) chosen = f;   // keep first as fallback
                 }
                 if (chosen == null || chosen.get_path () == null) return false;
-                dispatch (new OpenFileMessage (chosen.get_path ()));
+                open_file_or_activate (chosen.get_path ());
                 return true;
             });
             // Window implements ShortcutManager; route to Widget API.
@@ -609,10 +714,43 @@ private void setup_main_layout (AppModel model) {
             held_model.topics = ctx.topics;
             held_model.index = ctx.index;
             held_model.active_book = ctx;
+            // Per-book font override: prefer stored per-book size over global.
+            int per_font = held_model.per_books.get_font_size (path, held_model.settings.font_size);
+            if (per_font != held_model.viewer.font_size) {
+                held_model.viewer.font_size = per_font;
+                // Apply to WebKit immediately via existing viewer settings
+                tab.view.get_settings ().default_font_size = per_font;
+            }
+            // Restore last_url if stored and different from home (user left
+            // on a different page last session). Do not override when the
+            // current navigation already set intended_url.
+            string saved_url = held_model.per_books.get_last_url (path);
+            string target_url = ctx.home;
+            if (saved_url != "" && saved_url != ctx.home && held_model.chm_file.has_object (saved_url)) {
+                target_url = saved_url;
+                tab.url = target_url;
+                if (sync_now) {
+                    held_model.viewer.current_url = target_url;
+                    held_model.viewer.intended_url = target_url;
+                } else {
+                    // The OPEN_FILE_DONE dispatch will NAVIGATE to home;
+                    // override that by updating the pending navigation's target
+                    // via per-book state — the view's OPEN_FILE_DONE already
+                    // dispatched NAVIGATE(home) before we arrived here, so
+                    // we dispatch an additional NAVIGATE to the saved page
+                    // once the book is bound.
+                    GLib.Idle.add (() => {
+                        dispatch (new NavigateMessage (target_url, null, held_model.active_tab_index));
+                        return GLib.Source.REMOVE;
+                    });
+                }
+            } else {
+                tab.title = ctx.title;
+                tab.url = ctx.home;
+            }
             tab.title = ctx.title;
-            tab.url = ctx.home;
             tab.title_label.set_text (ctx.title);
-            if (sync_now) {
+            if (sync_now && saved_url == "") {
                 held_model.viewer.current_url = ctx.home;
                 held_model.viewer.current_title = ctx.title;
                 held_model.viewer.intended_url = ctx.home;
@@ -629,29 +767,35 @@ private void setup_main_layout (AppModel model) {
                 return;
             }
 
-            // Closing a book-bound tab closes that book for real, but only
-            // when no other tab still uses it (shared-book tabs from
-            // OPEN_IN_NEW_TAB keep the archive alive).
+            // Strict single-tab-per-file: every bound tab owns exactly
+            // one BookContext. Closing it must remove that context and
+            // close its handle.
             if (tab.book_path != "") {
-                bool last_for_book = true;
-                foreach (var t in tabs) {
-                    if (t != tab && t.book_path == tab.book_path) {
-                        last_for_book = false;
+                // Remove BookContext matching this tab
+                for (int i = 0; i < held_model.books.size; i++) {
+                    if (held_model.books[i].chm_file.filename () == tab.book_path) {
+                        held_model.books.remove_at (i);
                         break;
                     }
                 }
-                if (last_for_book) {
-                    var bk = CHMFile.by_path (tab.book_path);
-                    if (bk != null) bk.close ();      // unregisters too
-                    if (held_model.active_book != null &&
-                        held_model.chm_file.filename () == tab.book_path) {
-                        held_model.file_open = false;
-                    }
+                var bk = CHMFile.by_path (tab.book_path);
+                if (bk != null) bk.close ();      // unregisters too
+                // If we closed the active book, clear file_open if no books remain
+                if (held_model.books.size == 0) {
+                    held_model.file_open = false;
+                    held_model.active_book = null;
+                    held_model.chm_file.close ();
+                } else if (held_model.active_book != null &&
+                           held_model.active_book.chm_file.filename () == tab.book_path) {
+                    // Active book was closed but other books remain — will be
+                    // rebound in activate_tab_idx below.
+                    held_model.active_book = null;
                 }
             }
 
             tabs.remove_at (idx);
             viewer_notebook.remove_page (idx);
+            viewer_notebook.show_tabs = tabs.size > 1;
             if (idx == active_tab) {
                 int next = idx < tabs.size ? idx : idx - 1;
                 // Sentinel bypasses activate_tab_idx's num == active_tab
@@ -661,6 +805,7 @@ private void setup_main_layout (AppModel model) {
                 activate_tab_idx (next, true);
             } else if (idx < active_tab) {
                 active_tab--;
+                if (held_model != null) held_model.active_tab_index = active_tab;
             }
         }
 
@@ -784,6 +929,23 @@ private void setup_main_layout (AppModel model) {
             }
         }
 
+        // Strict single-tab-per-file: activate existing tab if the
+        // file is already open (canonical path compare), otherwise
+        // dispatch OPEN_FILE. Used by dialog, drag-drop, and any UI
+        // entry point that has access to tabs.
+        private void open_file_or_activate (string path) {
+            string canon = GLib.File.new_for_path (path).get_path () ?? path;
+            foreach (var t in tabs) {
+                if (t.book_path == "") continue;
+                string tb = GLib.File.new_for_path (t.book_path).get_path () ?? t.book_path;
+                if (tb == canon) {
+                    viewer_notebook.page = tabs.index_of (t);
+                    return;
+                }
+            }
+            dispatch (new OpenFileMessage (path));
+        }
+
         private void on_open_file () {
             var dialog = new FileDialog () {
                 title = _("Open CHM File"),
@@ -793,11 +955,17 @@ private void setup_main_layout (AppModel model) {
             filter.add_pattern ("*.chm");
             filter.add_pattern ("*.CHM");
             dialog.default_filter = filter;
+            // Restore last folder from settings
+            if (held_model != null && held_model.settings.last_opened_dir != null &&
+                held_model.settings.last_opened_dir.length > 0) {
+                dialog.initial_folder = GLib.File.new_for_path (held_model.settings.last_opened_dir);
+            }
             
             dialog.open.begin (this, null, (obj, res) => {
                 try {
                     var file = dialog.open.end (res);
-                    dispatch (new OpenFileMessage (file.get_path ()));
+                    var p = file.get_path ();
+                    if (p != null) open_file_or_activate (p);
                 } catch (GLib.Error e) {
                     if (!(e is GLib.IOError.CANCELLED)) {
                         warning ("Open dialog: %s", e.message);
@@ -820,6 +988,7 @@ private void setup_main_layout (AppModel model) {
                     if (existing != null) {
                         int idx = tabs.index_of (existing);
                         viewer_notebook.page = idx;   // fires activate
+                        refresh_recent_menus ();
                         break;
                     }
 
@@ -837,11 +1006,12 @@ private void setup_main_layout (AppModel model) {
                         created = true;
                     }
                     attach_book_to_tab (target, done_msg.ctx,
-                                        done_msg.path, true);
+                                         done_msg.path, true);
                     viewer_notebook.show_tabs = tabs.size > 1;
                     viewer_notebook.page = tabs.index_of (target);
                     if (!created)
                         target.view.sync_if_needed (model);
+                    refresh_recent_menus ();
                     break;
                 }
 
@@ -986,28 +1156,15 @@ private void setup_main_layout (AppModel model) {
                 }
 
                 case AppMessageKind.OPEN_IN_NEW_TAB: {
+                    // Strict single-tab-per-file: internal chm:// links
+                    // dispatched here (old target=_blank) now just navigate
+                    // in the current tab. The dedicated "new tab clone"
+                    // of the same book is removed (per-book persistence
+                    // would otherwise clash). External links are handled
+                    // via launch_external in ViewerView, not here.
                     var nt = (OpenInNewTabMessage) msg;
                     var target_path = normalize_chm_target (nt.url);
-
-                    // New tab within the SAME book; fresh history for it.
-                    // Do NOT snapshot the outgoing tab's url/title from
-                    // the shared model.viewer slot — that was the F26
-                    // race hot path. tab.url/title are owned by
-                    // NAVIGATE_DONE for each tab.
-                    var tab = create_tab (model);
-                    tab.book_path = model.chm_file.filename ();
-                    tab.view.book_path = tab.book_path;
-                    tab.history = new HistoryModel ();
-                    tab.url = target_path;
-                    tab.title = target_path;
-
-                    int new_idx = tabs.size - 1;
-                    active_tab = new_idx;
-                    held_model.history = tab.history;
-                    held_model.viewer.current_url = target_path;
-                    held_model.viewer.current_title = "";
-                    held_model.viewer.intended_url = target_path;
-                    dispatch (new NavigateMessage (target_path, null, new_idx));
+                    dispatch (new NavigateMessage (target_path, null, active_tab));
                     break;
                 }
 

@@ -33,6 +33,7 @@ namespace Vchm.Model {
         // File history
         public string[] recent_files { get; set; }
         public string[] bookmark_rows { get; set; }
+        public string[] per_book_rows { get; set; }
 
         // Last opened directory
         public string last_opened_dir { get; set; }
@@ -78,6 +79,7 @@ namespace Vchm.Model {
                 fixed_font_family = _settings.get_string ("fixed-font-family");
                 recent_files = _settings.get_strv ("recent-files");
             bookmark_rows = _settings.get_strv ("bookmarks");
+                per_book_rows = _settings.get_strv ("per-book-rows");
                 last_opened_dir = _settings.get_string ("last-opened-dir");
             } catch (GLib.Error e) {
                 stderr.printf ("Warning: Failed to load settings: %s\n", e.message);
@@ -100,6 +102,8 @@ namespace Vchm.Model {
             font_family = "Sans";
             fixed_font_family = "Monospace";
             recent_files = new string[0];
+            bookmark_rows = new string[0];
+            per_book_rows = new string[0];
             last_opened_dir = "";
         }
 
@@ -117,6 +121,8 @@ namespace Vchm.Model {
             foreach (var f in recent_files) sb.append_printf ("%s,", f);
             sb.append ("|");
             foreach (var r in bookmark_rows) sb.append_printf ("%s,", r);
+            sb.append ("|");
+            foreach (var r in per_book_rows) sb.append_printf ("%s,", r);
             sb.append ("|");
             sb.append (last_opened_dir);   // lone dir change must persist too
             return sb.str;
@@ -141,6 +147,7 @@ namespace Vchm.Model {
                 _settings.set_string ("fixed-font-family", fixed_font_family);
                 _settings.set_strv ("recent-files", recent_files);
             _settings.set_strv ("bookmarks", bookmark_rows);
+                _settings.set_strv ("per-book-rows", per_book_rows);
                 _settings.set_string ("last-opened-dir", last_opened_dir);
             } catch (GLib.Error e) {
                 stderr.printf ("Warning: Failed to save settings: %s\n", e.message);

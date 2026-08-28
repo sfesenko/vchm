@@ -57,6 +57,7 @@ lib_core_sources = [
   'src/model/hhcparser.vala',
   'src/model/htmlutils.vala',
   'src/model/bookmarks.vala',
+  'src/model/perbook.vala',
   'src/model/history.vala',
   'src/model/searchresult.vala',
   'src/model/settings.vala',

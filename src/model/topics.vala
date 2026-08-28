@@ -55,18 +55,14 @@ namespace Vchm.Model {
 
             uint8[] topics, strings, urltbl, urlstr;
             uint8[]? topidx;
+            bool has_topics = chm_file.get_topics_data (out topics, out strings,
+                                                        out urltbl, out urlstr, out topidx);
 
-            if (!chm_file.get_topics_data (out topics, out strings,
-                                           out urltbl, out urlstr, out topidx)) {
-                error = "Failed to read topics data from CHM";
-                loading = false;
-                return;
-            }
-
-            if (topidx != null && topidx.length >= 4) {
+            if (has_topics && topidx != null && topidx.length >= 4) {
                 root = build_binary_root (topidx, topics, strings, urltbl, urlstr,
                                           chm_file.encoding ());
-            } else {
+            }
+            if (root == null) {
                 var hhc = chm_file.load_hhc_tree ();
                 if (hhc != null && hhc.size > 0) {
                     root = new TopicsItem (_("Contents"), "");
@@ -79,6 +75,9 @@ namespace Vchm.Model {
             // Last resort for metadata-poor archives.
             if (root == null) {
                 root = build_flat_pages (chm_file);
+            }
+            if (root == null) {
+                error = "Failed to read topics data from CHM";
             }
 
             loading = false;

@@ -1,5 +1,7 @@
 .tmp
 _build/
 builddir/
+__pycache__/
+*.py[co]
 
 

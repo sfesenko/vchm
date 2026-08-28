@@ -59,6 +59,9 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             }
 
             // Heavy parse: run on a worker thread; dispatch marshals back.
+            // Capture long-lived parent dispatch, not the borrowed param
+            // (Vala delegates captured across threads UAF — elmish.vala:53).
+            var open_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                 try {
                     new GLib.Thread<void*> ("vchm-open", () => {
@@ -76,19 +79,20 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                                     ctx.title = GLib.Path.get_basename (path);
                                 ctx.home = ctx.chm_file.home_page ();
 
-                                dispatch (new OpenFileDoneMessage (
+                                open_parent (new OpenFileDoneMessage (
                                     path, ctx.title, ctx.home, ctx));
                             } else {
-                                dispatch (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                                open_parent (new OpenFileFailedMessage (path, "Failed to open CHM file"));
                             }
                         } finally {
+                            // Mutex is thread-safe; release can run off-main-thread.
                             model.release_open (path);
                         }
                         return null;
                     });
                 } catch (GLib.Error e) {
                     model.release_open (path);
-                    dispatch (new OpenFileFailedMessage (path, e.message));
+                    open_parent (new OpenFileFailedMessage (path, e.message));
                 }
             });
             break;
@@ -104,16 +108,27 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // unconditionally leaked a chmlib handle + registry entry
             // per reopen (review F6).
             var ctx = done_msg.ctx;
+            // Canonicalize for dedup: File.get_path resolves ./ and //.
+            string canon = GLib.File.new_for_path (done_msg.path).get_path () ?? done_msg.path;
             BookContext? dup = null;
-            foreach (var b in model.books) {
-                if (b.chm_file.filename () == done_msg.path) { dup = b; break; }
+            int dup_idx = -1;
+            for (int i = 0; i < model.books.size; i++) {
+                var b = model.books[i];
+                string bf = GLib.File.new_for_path (b.chm_file.filename ()).get_path () ?? b.chm_file.filename ();
+                if (bf == canon) { dup = b; dup_idx = i; break; }
             }
+            int nav_tab_index;
             if (dup != null) {
+                // The duplicate's load() overwrote the registry entry for
+                // this path; its close() removes it. Re-register the
+                // survivor so by_path still resolves.
                 ctx.chm_file.close ();
-                ctx.chm_file.re_register ();   // load() displaced our key
+                dup.chm_file.re_register ();
                 ctx = dup;
+                nav_tab_index = dup_idx;
             } else {
                 model.books.add (ctx);
+                nav_tab_index = model.books.size - 1;
             }
 
             model.active_book = ctx;
@@ -130,15 +145,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             // Dispatch NAVIGATE to actually load the content
             // DO NOT add to history here - NAVIGATE_DONE will handle it
-            //
-            // tab_index: the new book is the last in model.books.
-            // updateView.OPEN_FILE_DONE runs after this and creates a
-            // new tab at exactly this index (or reuses the placeholder
-            // at 0 for the first book). Setting active_tab_index here
-            // would be too early (the view hasn't run yet), but the
-            // message's tab_index is enough for NAVIGATE_DONE to find
-            // the right tab.
-            int nav_tab_index = model.books.size - 1;
             model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title, nav_tab_index));
             
             // Add to recent files
@@ -217,6 +223,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var snap_title = nav_msg.title ?? "";
             var snap_tab_index = nav_msg.tab_index;
 
+            var nav_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                 try {
                 new GLib.Thread<void*> ("vchm-nav", () => {
@@ -253,18 +260,18 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 // Dead link: every fallback missed — report failure instead
                 // of DONE (which loaded a blank page and polluted history).
                 if (!snap_file.has_object (target)) {
-                    dispatch (new NavigateFailedMessage (snap_url, "Page not found"));
+                    nav_parent (new NavigateFailedMessage (snap_url, "Page not found"));
                     return null;
                 }
 
                 // The intended target rides along so a second navigation
                 // starting mid-flight cannot steal this one's history
                 // entry (review F7).
-                dispatch (new NavigateDoneMessage (target, snap_title, snap_url, snap_tab_index));
+                nav_parent (new NavigateDoneMessage (target, snap_title, snap_url, snap_tab_index));
                 return null;
                 });
                 } catch (GLib.Error e) {
-                    dispatch (new NavigateFailedMessage (snap_url, e.message));
+                    nav_parent (new NavigateFailedMessage (snap_url, e.message));
                 }
             });
             break;
@@ -324,6 +331,11 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.topics.selected_url = history_url;
             model.topics.expand_path (history_url);
             model.status_text = done_msg.title != "" ? done_msg.title : done_msg.url;
+            // Persist per-book last page (for restore on next open)
+            if (model.file_open) {
+                model.per_books.set_last_url (model.chm_file.filename (), history_url);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             break;
         }
 
@@ -532,6 +544,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 bool ww = model.search.whole_words;
                 bool to = model.search.titles_only;
 
+                var search_parent = model.get_parent_dispatch ();
                 cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                     // Full scan is expensive — run on a worker thread.
                     // dispatch() marshals the result back to the main loop.
@@ -539,11 +552,11 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                         new GLib.Thread<void*> ("vchm-search", () => {
                             Gee.ArrayList<SearchResult> res;
                             snap_file.search (q, ww, to, out res);
-                            dispatch (new SearchDoneMessage (res));
+                            search_parent (new SearchDoneMessage (res));
                             return null;
                         });
                     } catch (GLib.Error e) {
-                        dispatch (new SearchDoneMessage (new Gee.ArrayList<SearchResult> ()));
+                        search_parent (new SearchDoneMessage (new Gee.ArrayList<SearchResult> ()));
                     }
                 });
             }
@@ -610,18 +623,30 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.VIEWER_FONT_INCREASE: {
             model.viewer.increase_font_size ();
             model.settings.font_size = model.viewer.font_size;
+            if (model.file_open) {
+                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_DECREASE: {
             model.viewer.decrease_font_size ();
             model.settings.font_size = model.viewer.font_size;
+            if (model.file_open) {
+                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_RESET: {
             model.viewer.reset_font_size ();
             model.settings.font_size = model.viewer.font_size;
+            if (model.file_open) {
+                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             break;
         }
 
@@ -633,6 +658,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.settings.font_size = font_msg.size;
             model.settings.font_family = font_msg.family;
             model.settings.fixed_font_family = font_msg.fixed_family;
+            if (model.file_open) {
+                model.per_books.set_font_size (model.chm_file.filename (), font_msg.size);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             break;
         }
 
@@ -704,6 +733,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var snap_file = model.chm_file;
             var snap_url = target;
 
+            var rebuild_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
                 try {
                     new GLib.Thread<void*> ("vchm-rebuild", () => {
@@ -713,11 +743,11 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                         var index = new IndexModel ();
                         topics.build_from_chm (snap_file);
                         index.build_from_chm (snap_file);
-                        dispatch (new PanelsRebuiltMessage (topics, index));
+                        rebuild_parent (new PanelsRebuiltMessage (topics, index));
                         return null;
                     });
                 } catch (GLib.Error e) {
-                    dispatch (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel ()));
+                    rebuild_parent (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel ()));
                 }
             });
 

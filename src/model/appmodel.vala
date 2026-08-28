@@ -15,6 +15,7 @@ namespace Vchm.Model {
         public HistoryModel history = new HistoryModel ();
         public string title = "";
         public string home = "/";
+        public bool history_navigation_in_progress = false;
     }
 
     public class AppModel : Object {
@@ -29,10 +30,22 @@ namespace Vchm.Model {
         // pattern keeps the existing view/update code working while
         // the real per-tab state lives in DocumentTab.
         private BookContext? _active_ctx = null;
-        public CHMFile chm_file { get { return _active_ctx != null ? _active_ctx.chm_file : _scratch_chm; } set { _scratch_chm = value; } }
-        public TopicsModel topics { get { return _active_ctx != null ? _active_ctx.topics : _scratch_topics; } set { _scratch_topics = value; } }
-        public IndexModel index { get { return _active_ctx != null ? _active_ctx.index : _scratch_index; } set { _scratch_index = value; } }
-        public HistoryModel history { get { return _active_ctx != null ? _active_ctx.history : _scratch_history; } set { _scratch_history = value; } }
+        public CHMFile chm_file {
+            get { return _active_ctx != null ? _active_ctx.chm_file : _scratch_chm; }
+            set { if (_active_ctx != null) _active_ctx.chm_file = value; else _scratch_chm = value; }
+        }
+        public TopicsModel topics {
+            get { return _active_ctx != null ? _active_ctx.topics : _scratch_topics; }
+            set { if (_active_ctx != null) _active_ctx.topics = value; else _scratch_topics = value; }
+        }
+        public IndexModel index {
+            get { return _active_ctx != null ? _active_ctx.index : _scratch_index; }
+            set { if (_active_ctx != null) _active_ctx.index = value; else _scratch_index = value; }
+        }
+        public HistoryModel history {
+            get { return _active_ctx != null ? _active_ctx.history : _scratch_history; }
+            set { if (_active_ctx != null) _active_ctx.history = value; else _scratch_history = value; }
+        }
         public SearchModel search { get; private set; }
         // The viewer is the active tab's per-tab ViewerModel. set
         // changes the scratch slot; AppView.activate_tab_idx pushes
@@ -42,6 +55,7 @@ namespace Vchm.Model {
         private ViewerModel _scratch_viewer = new ViewerModel ();
         public SettingsModel settings { get; private set; }
         public BookmarkStore bookmarks { get; private set; }
+        public PerBookStore per_books { get; private set; }
 
         // Scratch slots used during a model update; the view flushes
         // them into the active tab on tab activation. Keeping the
@@ -79,7 +93,13 @@ namespace Vchm.Model {
 
         // Set while a back/forward navigation is in flight so NAVIGATE_DONE
         // does not push a duplicate entry and truncate forward history.
-        public bool history_navigation_in_progress { get; set; }
+        // Proxied to active BookContext; with strict single-tab-per-file
+        // global would work, but per-book is correct for clones.
+        public bool history_navigation_in_progress {
+            get { return _active_ctx != null ? _active_ctx.history_navigation_in_progress : _scratch_history_in_progress; }
+            set { if (_active_ctx != null) _active_ctx.history_navigation_in_progress = value; else _scratch_history_in_progress = value; }
+        }
+        private bool _scratch_history_in_progress = false;
 
         // OPEN_FILE serialization (F26 follow-up): two concurrent open
         // workers raced on model.books / model.viewer / tabs[].url and
@@ -147,6 +167,8 @@ namespace Vchm.Model {
             settings = new SettingsModel ();
             bookmarks = new BookmarkStore ();
             bookmarks.load (settings.bookmark_rows);
+            per_books = new PerBookStore ();
+            per_books.load (settings.per_book_rows);
 
             // Apply saved viewer settings
             viewer.font_size = settings.font_size;

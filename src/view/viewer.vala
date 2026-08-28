@@ -93,18 +93,13 @@ namespace Vchm.View {
                                 link.has_prefix ("mailto:");
                 if (!external) return false;
 
+                // External links: single action — open in default browser.
+                // Internal chm:// links just follow in the same tab (no
+                // new-tab clone under strict single-tab-per-file).
                 var ext_item = new WebKit.ContextMenuItem.from_gaction (
                     open_external_action,
                     _("Open Link in Browser"), link);
                 menu.insert (ext_item, 0);
-
-                // CHM-internal links also offer a new tab.
-                if (!link.has_prefix ("mailto:")) {
-                    var tab_item = new WebKit.ContextMenuItem.from_gaction (
-                        new_tab_action,
-                        _("Open Link in New Tab"), link);
-                    menu.insert (tab_item, 1);
-                }
 
                 menu.append (new WebKit.ContextMenuItem.separator ());
                 return false;   // keep default items too
@@ -137,9 +132,11 @@ namespace Vchm.View {
                 decision.ignore ();
                 if (wuri != null) {
                     if (wuri.has_prefix ("chm://")) {
+                        // Strict single-tab-per-file: target=_blank inside
+                        // the same book just follows the link in the same tab.
                         var wpath = chm_path_from_uri (wuri);
                         if (wpath != null && wpath.length > 1)
-                            dispatch (new OpenInNewTabMessage (wpath));
+                            dispatch (new NavigateMessage (wpath));
                     } else if (wuri.has_prefix ("http://") || wuri.has_prefix ("https://") ||
                                wuri.has_prefix ("mailto:")) {
                         launch_external (wuri);
@@ -281,6 +278,32 @@ namespace Vchm.View {
             op.run_dialog ((Gtk.Window?) get_root ());
         }
 
+        // Scroll persistence: save/restore per-book scroll via JS.
+        public void save_scroll (AppModel model) {
+            if (!model.file_open || model.chm_file.filename () == "") return;
+            string archive = model.chm_file.filename ();
+            // Query scrollY asynchronously; on result persist to per-book store.
+            evaluate_javascript.begin ("window.scrollY", -1, null, null, null, (obj, res) => {
+                try {
+                    var js_val = evaluate_javascript.end (res);
+                    if (js_val != null) {
+                        double d = js_val.to_double ();
+                        int y = (int) d;
+                        model.per_books.set_scroll (archive, y);
+                        model.settings.per_book_rows = model.per_books.save ();
+                    }
+                } catch (Error e) {}
+            });
+        }
+
+        public void restore_scroll (int y) {
+            if (y <= 0) return;
+            var js = "window.scrollTo(0, %d)".printf (y);
+            evaluate_javascript.begin (js, -1, null, null, null, (obj, res) => {
+                try { evaluate_javascript.end (res); } catch (Error e) {}
+            });
+        }
+
         // Load when the model's current URL differs from what we show.
         // Called from update() and on tab activation. The `force` flag
         // bypasses the cache-skip and always reloads — needed when a
@@ -288,12 +311,18 @@ namespace Vchm.View {
         // unloaded the page contents while the tab was off-screen.
         public void sync_if_needed (AppModel model, bool force = false) {
             var cur = model.viewer.current_url;
-            var book = GLib.Path.get_basename (model.chm_file.filename ());
+            var book = model.chm_file.filename ();
             if (model.file_open && cur.length > 0 &&
                 (force || cur != loaded_url || book != loaded_book)) {
                 loaded_url = cur;
                 loaded_book = book;
                 load_uri (page_uri (cur));
+                // Restore scroll after load (per-book). The page may not be
+                // painted yet; delay via idle and also via load_changed FINISHED.
+                int saved_y = model.per_books.get_scroll (book);
+                if (saved_y > 0) {
+                    GLib.Idle.add (() => { restore_scroll (saved_y); return GLib.Source.REMOVE; });
+                }
             }
         }
 
