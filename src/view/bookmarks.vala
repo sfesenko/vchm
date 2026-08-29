@@ -51,9 +51,43 @@ namespace Vchm.View {
                 int idx = combo.active;
                 var list = current_list ();
                 if (idx >= 0 && list != null && idx < list.size)
-                    dispatch (new BookmarkRemoveMessage (list[idx].title));
+                    dispatch (new BookmarkRemoveMessage (list[idx].title, list[idx].url));
             });
             btns.append (remove_btn);
+
+            var rename_btn = new Button.with_label (_("Rename"));
+            rename_btn.clicked.connect (() => {
+                int idx = combo.active;
+                var list = current_list ();
+                if (idx < 0 || list == null || idx >= list.size) return;
+                var bm = list[idx];
+                var dialog = new Dialog.with_buttons (_("Rename Bookmark"), (Window) get_root (),
+                    DialogFlags.MODAL, _("_Cancel"), ResponseType.CANCEL, _("_Rename"), ResponseType.ACCEPT);
+                dialog.set_default_size (350, 100);
+                var content = dialog.get_content_area ();
+                var box = new Box (Orientation.VERTICAL, 6) {
+                    margin_top = 12, margin_bottom = 12, margin_start = 12, margin_end = 12
+                };
+                var label = new Label (_("New title:"));
+                label.halign = Align.START;
+                var entry = new Entry () { text = bm.title, hexpand = true };
+                entry.activates_default = true;
+                dialog.set_default_response (ResponseType.ACCEPT);
+                box.append (label);
+                box.append (entry);
+                content.append (box);
+                dialog.present ();
+                entry.grab_focus ();
+                dialog.response.connect ((resp) => {
+                    if (resp == ResponseType.ACCEPT) {
+                        var nt = entry.text.strip ();
+                        if (nt.length > 0 && nt != bm.title)
+                            dispatch (new BookmarkRenameMessage (bm.url, nt));
+                    }
+                    dialog.destroy ();
+                });
+            });
+            btns.append (rename_btn);
             append (btns);
 
             repopulate ();

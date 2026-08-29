@@ -23,7 +23,8 @@ namespace Vchm.Model {
         public bool show_topics { get; set; }
         public bool show_index { get; set; }
         public bool show_search { get; set; }
-        public int active_side_panel { get; set; } // 0=topics, 1=index, 2=search
+        public bool show_bookmarks { get; set; }
+        public int active_side_panel { get; set; } // 0=topics, 1=index, 2=search, 3=bookmarks
 
         // Viewer settings
         public int font_size { get; set; }
@@ -73,6 +74,7 @@ namespace Vchm.Model {
                 show_topics = _settings.get_boolean ("show-topics");
                 show_index = _settings.get_boolean ("show-index");
                 show_search = _settings.get_boolean ("show-search");
+                show_bookmarks = _settings.get_boolean ("show-bookmarks");
                 active_side_panel = _settings.get_int ("active-side-panel");
                 font_size = _settings.get_int ("font-size");
                 font_family = _settings.get_string ("font-family");
@@ -97,6 +99,7 @@ namespace Vchm.Model {
             show_topics = true;
             show_index = true;
             show_search = false;
+            show_bookmarks = false;
             active_side_panel = 0;
             font_size = 12;
             font_family = "Sans";
@@ -114,8 +117,8 @@ namespace Vchm.Model {
             sb.append_printf ("%d;%d;%d;%d;%b;%d;", window_x, window_y,
                               window_width, window_height, window_maximized,
                               sash_position);
-            sb.append_printf ("%b;%b;%b;%d;", show_topics, show_index,
-                              show_search, active_side_panel);
+            sb.append_printf ("%b;%b;%b;%b;%d;", show_topics, show_index,
+                               show_search, show_bookmarks, active_side_panel);
             sb.append_printf ("%d;%s;%s;", font_size, font_family,
                               fixed_font_family);
             foreach (var f in recent_files) sb.append_printf ("%s,", f);
@@ -141,6 +144,7 @@ namespace Vchm.Model {
                 _settings.set_boolean ("show-topics", show_topics);
                 _settings.set_boolean ("show-index", show_index);
                 _settings.set_boolean ("show-search", show_search);
+                _settings.set_boolean ("show-bookmarks", show_bookmarks);
                 _settings.set_int ("active-side-panel", active_side_panel);
                 _settings.set_int ("font-size", font_size);
                 _settings.set_string ("font-family", font_family);

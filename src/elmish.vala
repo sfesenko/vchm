@@ -105,11 +105,16 @@ namespace Elmish {
         }
 
         ~ElmishProgram () {
+            dispose ();
+        }
+
+        public void dispose () {
             disposed = true;
             if (view_update_source_id != 0) {
                 GLib.Source.remove (view_update_source_id);
                 view_update_source_id = 0;
             }
+            view = null;
         }
 
         // Creates the view and runs the optional initial command
@@ -166,7 +171,8 @@ namespace Elmish {
 
         // Coalesces view updates: bursts of messages (position ticks, drags)
         // collapse into a single idle callback that re-renders from the model,
-        // using the latest message of the burst.
+        // using the latest message of the burst. Intermediates are dropped by
+        // design — every handler must be idempotent or re-derive from model.
         private void queue_view_update (Message msg) {
             pending_message = msg;
             if (view_update_queued) {
@@ -182,11 +188,7 @@ namespace Elmish {
                 var message = weak_self.pending_message;
                 weak_self.pending_message = null;
                 if (weak_self.view != null && message != null) {
-                    try {
-                        weak_self.updateView (message, weak_self.model, weak_self.view);
-                    } catch (Error e) {
-                        // Ignore errors in view update
-                    }
+                    weak_self.updateView (message, weak_self.model, weak_self.view);
                 }
                 return false;
             });

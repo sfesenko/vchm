@@ -264,6 +264,18 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                     return null;
                 }
 
+                // If caller passed no title (flat TOC, programmatic NAVIGATE),
+                // derive it from the target page's <title> or <h1> so status
+                // bar / window title never shows raw "/ch1.htm".
+                if (snap_title == "") {
+                    var c = snap_file.get_content (target);
+                    if (c.success) {
+                        string t = Vchm.Model.TopicsModel.extract_title (c.content, snap_file.encoding ());
+                        if (t == "") t = Vchm.Model.TopicsModel.extract_heading (c.content, snap_file.encoding ());
+                        if (t != "") snap_title = t;
+                    }
+                }
+
                 // The intended target rides along so a second navigation
                 // starting mid-flight cannot steal this one's history
                 // entry (review F7).
@@ -404,6 +416,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 model.settings.show_topics = true;
                 model.settings.show_index = false;
                 model.settings.show_search = false;
+                model.settings.show_bookmarks = false;
                 model.settings.active_side_panel = 0;
             }
             break;
@@ -417,6 +430,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 model.settings.show_topics = false;
                 model.settings.show_index = true;
                 model.settings.show_search = false;
+                model.settings.show_bookmarks = false;
                 model.settings.active_side_panel = 1;
             }
             break;
@@ -430,7 +444,22 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 model.settings.show_topics = false;
                 model.settings.show_index = false;
                 model.settings.show_search = true;
+                model.settings.show_bookmarks = false;
                 model.settings.active_side_panel = 2;
+            }
+            break;
+        }
+
+        case AppMessageKind.TOGGLE_BOOKMARKS_PANEL: {
+            if (model.settings.show_bookmarks &&
+                model.settings.active_side_panel == 3) {
+                model.settings.show_bookmarks = false;
+            } else {
+                model.settings.show_topics = false;
+                model.settings.show_index = false;
+                model.settings.show_search = false;
+                model.settings.show_bookmarks = true;
+                model.settings.active_side_panel = 3;
             }
             break;
         }
@@ -702,10 +731,27 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var rm = (BookmarkRemoveMessage) msg;
             var archive = model.chm_file.filename ();
             if (!model.file_open || archive.length == 0) break;
-            model.bookmarks.remove (archive, rm.title);
-            model.settings.bookmark_rows = model.bookmarks.save ();
-            model.settings.save ();
-            model.get_parent_dispatch () (new BookmarksChangedMessage ());
+            bool ok = false;
+            if (rm.url != "") ok = model.bookmarks.remove_by_url (archive, rm.url);
+            if (!ok) ok = model.bookmarks.remove (archive, rm.title);
+            if (ok) {
+                model.settings.bookmark_rows = model.bookmarks.save ();
+                model.settings.save ();
+                model.get_parent_dispatch () (new BookmarksChangedMessage ());
+            }
+            break;
+        }
+
+        case AppMessageKind.BOOKMARK_RENAME: {
+            var rn = (BookmarkRenameMessage) msg;
+            var archive = model.chm_file.filename ();
+            if (!model.file_open || archive.length == 0) break;
+            if (rn.new_title.strip ().length == 0) break;
+            if (model.bookmarks.rename (archive, rn.url, rn.new_title)) {
+                model.settings.bookmark_rows = model.bookmarks.save ();
+                model.settings.save ();
+                model.get_parent_dispatch () (new BookmarksChangedMessage ());
+            }
             break;
         }
 

@@ -103,5 +103,27 @@ namespace Vchm.Model {
             }
             return false;
         }
+
+        public bool remove_by_url (string archive, string url) {
+            var list = for_book (archive);
+            for (int i = 0; i < list.size; i++) {
+                if (list[i].url == url) {
+                    list.remove_at (i);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public bool rename (string archive, string url, string new_title) {
+            var list = for_book (archive);
+            for (int i = 0; i < list.size; i++) {
+                if (list[i].url == url) {
+                    list[i].title = new_title;
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 }

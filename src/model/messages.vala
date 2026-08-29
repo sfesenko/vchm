@@ -26,6 +26,7 @@ namespace Vchm.Model {
         TOGGLE_TOPICS_PANEL,
         TOGGLE_INDEX_PANEL,
         TOGGLE_SEARCH_PANEL,
+        TOGGLE_BOOKMARKS_PANEL,
         SET_ACTIVE_SIDE_PANEL,
         SET_SASH_POSITION,
 
@@ -69,6 +70,7 @@ namespace Vchm.Model {
         SET_ENCODING,
         BOOKMARK_ADD,
         BOOKMARK_REMOVE,
+        BOOKMARK_RENAME,
         BOOKMARK_JUMP,
         BOOKMARKS_CHANGED,
         OPEN_IN_NEW_TAB,
@@ -214,6 +216,10 @@ namespace Vchm.Model {
 
     public class ToggleSearchPanelMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.TOGGLE_SEARCH_PANEL; } }
+    }
+
+    public class ToggleBookmarksPanelMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.TOGGLE_BOOKMARKS_PANEL; } }
     }
 
     public class SetActiveSidePanelMessage : AppMessage {
@@ -372,7 +378,21 @@ namespace Vchm.Model {
     public class BookmarkRemoveMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.BOOKMARK_REMOVE; } }
         public string title { get; private set; }
-        public BookmarkRemoveMessage (string title) { this.title = title; }
+        public string url { get; private set; }
+        public BookmarkRemoveMessage (string title, string? url = null) {
+            this.title = title;
+            this.url = url ?? "";
+        }
+    }
+
+    public class BookmarkRenameMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.BOOKMARK_RENAME; } }
+        public string url { get; private set; }
+        public string new_title { get; private set; }
+        public BookmarkRenameMessage (string url, string new_title) {
+            this.url = url;
+            this.new_title = new_title;
+        }
     }
 
     public class BookmarksChangedMessage : AppMessage {

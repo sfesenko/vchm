@@ -37,6 +37,10 @@
       <default>false</default>
       <summary>Show search panel</summary>
     </key>
+    <key name="show-bookmarks" type="b">
+      <default>false</default>
+      <summary>Show bookmarks panel</summary>
+    </key>
     <key name="active-side-panel" type="i">
       <default>0</default>
       <summary>Active side panel (0=topics, 1=index, 2=search)</summary>

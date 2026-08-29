@@ -247,8 +247,8 @@ namespace Vchm.Model {
             return root_item;
         }
 
-        private static string extract_title (string html, string enc) {
-            var low = html.down ();
+        public static string extract_title (string html, string enc) {
+            var low = Vchm.Model.HtmlTextUtils.ascii_down (html);
             int open = low.index_of ("<title");
             if (open < 0) return "";
             int gt = html.index_of (">", open);
@@ -263,7 +263,7 @@ namespace Vchm.Model {
 
         // First <h1>/<h2> heading text — a per-page label when the
         // <title> is duplicated across the book.
-        private static string extract_heading (string html, string enc) {
+        public static string extract_heading (string html, string enc) {
             var low = Vchm.Model.HtmlTextUtils.ascii_down (html);
             foreach (string tag in new string[] { "<h1", "<h2" }) {
                 int open = low.index_of (tag);

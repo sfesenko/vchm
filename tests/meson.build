@@ -6,6 +6,7 @@ test_deps = [
 # Binary parser fixtures. Generated at build time from tools/mkfixtures.py
 # so a fresh clone works without hand-generated blobs (review F25); falls
 # back to committed-in-workdir copies when python3 is unavailable.
+# Test book override: -Dtest_book=/path or env VCHM_TEST_BOOK=/path (A6).
 python3 = find_program('python3', required: false)
 if python3.found()
   fixture_names = [
@@ -39,6 +40,10 @@ test_env = [
 
 # Optional smoke test against a real book when the developer provides one.
 real_book = get_option('test_book')
+if real_book == ''
+  # Env fallback for CI / ad-hoc runs without reconfiguring (A6)
+  real_book = run_command('sh', '-c', 'echo -n "$VCHM_TEST_BOOK"', check: false).stdout().strip()
+endif
 have_real_book = real_book != ''
 
 test_chmlib = executable('test_chmlib',

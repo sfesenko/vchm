@@ -30,6 +30,9 @@ if appstream_util.found()
 endif
 
 # GSettings schema
+install_data('org.gnome.vchm.gschema.xml',
+  install_dir: join_paths(get_option('datadir'), 'glib-2.0/schemas')
+)
 gnome.compile_schemas()
 
 subdir('icons')

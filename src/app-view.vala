@@ -51,6 +51,7 @@ namespace Vchm {
         public const string ACTION_TOGGLE_TOPICS = "toggle_topics";
         public const string ACTION_TOGGLE_INDEX = "toggle_index";
         public const string ACTION_TOGGLE_SEARCH = "toggle_search";
+        public const string ACTION_TOGGLE_BOOKMARKS = "toggle_bookmarks";
         public const string ACTION_ABOUT = "about";
         public const string ACTION_PREFERENCES = "preferences";
 
@@ -83,7 +84,7 @@ namespace Vchm {
         // `model.viewer` reads come through this property in the view
         // code; the update function in app-update.vala still uses
         // model.viewer (the shared slot) for backward compatibility.
-        public ViewerModel active_viewer {
+        public ViewerModel? active_viewer {
             get {
                 if (active_tab < 0 || active_tab >= tabs.size) return null;
                 return tabs[active_tab].viewer;
@@ -99,6 +100,7 @@ namespace Vchm {
         private GLib.SimpleAction act_topics;
         private GLib.SimpleAction act_index;
         private GLib.SimpleAction act_search;
+        private GLib.SimpleAction act_bookmarks;
 
         // Guards against notify->dispatch->set->notify feedback loops.
         private bool sash_updating = false;
@@ -156,31 +158,69 @@ namespace Vchm {
 
             // Stateful panel toggles: menu check-marks and toolbar
             // ToggleButtons stay in sync through the action state.
-            // dispatch() is synchronous here — the flag is already flipped
-            // when we mirror it into the action state.
+            // Use change_state (not activate) so the action's new state is
+            // authoritative; view sync is deferred to updateView (Idle) where
+            // model.settings.* already reflects the toggled value. The old
+            // post-dispatch sync_panel_actions read stale model via Elmish
+            // coalescing and left the button stuck.
             act_topics = new GLib.SimpleAction.stateful (
-                ACTION_TOGGLE_TOPICS, null, held_model != null ? held_model.settings.show_topics : true);
-            act_topics.activate.connect (() => {
+                ACTION_TOGGLE_TOPICS, null, new Variant.boolean (held_model != null ? held_model.settings.show_topics : true));
+            act_topics.change_state.connect ((value) => {
+                act_topics.set_state (value);
                 dispatch (new ToggleTopicsPanelMessage ());
-                sync_panel_actions (held_model);
+            });
+            act_topics.activate.connect (() => {
+                // Toggle via activate (e.g. toolbar ToggleButton) — flip state then change_state path
+                var cur = act_topics.get_state ().get_boolean ();
+                act_topics.change_state (new Variant.boolean (!cur));
             });
             add_action (act_topics);
 
             act_index = new GLib.SimpleAction.stateful (
-                ACTION_TOGGLE_INDEX, null, held_model != null ? held_model.settings.show_index : true);
-            act_index.activate.connect (() => {
+                ACTION_TOGGLE_INDEX, null, new Variant.boolean (held_model != null ? held_model.settings.show_index : true));
+            act_index.change_state.connect ((value) => {
+                act_index.set_state (value);
                 dispatch (new ToggleIndexPanelMessage ());
-                sync_panel_actions (held_model);
+            });
+            act_index.activate.connect (() => {
+                var cur = act_index.get_state ().get_boolean ();
+                act_index.change_state (new Variant.boolean (!cur));
             });
             add_action (act_index);
 
             act_search = new GLib.SimpleAction.stateful (
-                ACTION_TOGGLE_SEARCH, null, held_model != null ? held_model.settings.show_search : false);
-            act_search.activate.connect (() => {
+                ACTION_TOGGLE_SEARCH, null, new Variant.boolean (held_model != null ? held_model.settings.show_search : false));
+            act_search.change_state.connect ((value) => {
+                act_search.set_state (value);
                 dispatch (new ToggleSearchPanelMessage ());
-                sync_panel_actions (held_model);
+            });
+            act_search.activate.connect (() => {
+                var cur = act_search.get_state ().get_boolean ();
+                act_search.change_state (new Variant.boolean (!cur));
             });
             add_action (act_search);
+
+            // Bookmarks panel toggle — sidebar page 3
+            bool show_bookmarks_init = false;
+            if (held_model != null) {
+                // active_side_panel 3 == bookmarks visible; show_topics/index/search
+                // are exclusive, so bookmarks visibility is active==3 && any shown
+                show_bookmarks_init = held_model.settings.active_side_panel == 3 &&
+                    (held_model.settings.show_topics || held_model.settings.show_index || held_model.settings.show_search);
+                // Fallback: if no panel shown yet, keep hidden
+                // Also allow direct show_bookmarks flag if added later; for now derive
+            }
+            act_bookmarks = new GLib.SimpleAction.stateful (
+                ACTION_TOGGLE_BOOKMARKS, null, new Variant.boolean (show_bookmarks_init));
+            act_bookmarks.change_state.connect ((value) => {
+                act_bookmarks.set_state (value);
+                dispatch (new ToggleBookmarksPanelMessage ());
+            });
+            act_bookmarks.activate.connect (() => {
+                var cur = act_bookmarks.get_state ().get_boolean ();
+                act_bookmarks.change_state (new Variant.boolean (!cur));
+            });
+            add_action (act_bookmarks);
 
             var open_recent = new GLib.SimpleAction ("open-recent", GLib.VariantType.STRING);
             open_recent.activate.connect ((parameter) => {
@@ -344,6 +384,7 @@ namespace Vchm {
             view_section.append (_("Contents"), "win.toggle_topics");
             view_section.append (_("Index"), "win.toggle_index");
             view_section.append (_("Search"), "win.toggle_search");
+            view_section.append (_("Bookmarks"), "win.toggle_bookmarks");
             view_section.append (_("Increase Font Size"), "win.font_increase");
             view_section.append (_("Decrease Font Size"), "win.font_decrease");
             view_section.append (_("Reset Font Size"), "win.font_reset");
@@ -485,7 +526,8 @@ private void setup_main_layout (AppModel model) {
             // saved-off panel still showed it (review F18).
             sidebar_box.visible = model.settings.show_topics ||
                                   model.settings.show_index ||
-                                  model.settings.show_search;
+                                  model.settings.show_search ||
+                                  model.settings.show_bookmarks;
             sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
 
             // Viewer area
@@ -650,15 +692,63 @@ private void setup_main_layout (AppModel model) {
             var dialog = new Gtk.Dialog.with_buttons (
                 _("Preferences"), this, Gtk.DialogFlags.MODAL,
                 _("Close"), Gtk.ResponseType.CLOSE);
-            dialog.set_default_size (380, 100);
+            dialog.set_default_size (420, 200);
 
-            var row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12) {
+            var content = (Gtk.Box) dialog.get_content_area ();
+            var vbox = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
                 margin_top = 12, margin_bottom = 12,
                 margin_start = 12, margin_end = 12
             };
-            row.append (new Gtk.Label (
-                _("Images are always loaded from the opened book. Remote content is blocked.")));
-            dialog.get_content_area ().append (row);
+
+            var info = new Gtk.Label (
+                _("Images are always loaded from the opened book. Remote content is blocked."));
+            info.wrap = true;
+            info.xalign = 0;
+            vbox.append (info);
+
+            // Proportional font picker (family + size) — GTK4 FontDialogButton
+            var prop_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            prop_row.append (new Gtk.Label (_("Proportional font:")) { xalign = 0, hexpand = true });
+            var prop_dialog = new Gtk.FontDialog ();
+            var prop_btn = new Gtk.FontDialogButton (prop_dialog);
+            prop_btn.tooltip_text = _("Choose proportional font");
+            var prop_desc = Pango.FontDescription.from_string ("%s %d".printf (model.viewer.font_family, model.viewer.font_size));
+            prop_btn.set_font_desc (prop_desc);
+            prop_btn.notify["font-desc"].connect (() => {
+                var desc = prop_btn.get_font_desc ();
+                if (desc == null) return;
+                string fam = desc.get_family () ?? model.viewer.font_family;
+                int sz = desc.get_size () / Pango.SCALE;
+                if (sz == 0) sz = model.viewer.font_size;
+                if (sz < 6) sz = 6;
+                if (sz > 72) sz = 72;
+                dispatch (new ViewerFontChangedMessage (sz, fam, model.viewer.fixed_font_family));
+            });
+            prop_row.append (prop_btn);
+            vbox.append (prop_row);
+
+            // Fixed font picker
+            var fixed_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            fixed_row.append (new Gtk.Label (_("Fixed font:")) { xalign = 0, hexpand = true });
+            var fixed_dialog = new Gtk.FontDialog ();
+            var fixed_btn = new Gtk.FontDialogButton (fixed_dialog);
+            fixed_btn.tooltip_text = _("Choose fixed-width font");
+            var fixed_desc = Pango.FontDescription.from_string ("%s %d".printf (model.viewer.fixed_font_family, model.viewer.font_size));
+            fixed_btn.set_font_desc (fixed_desc);
+            fixed_btn.notify["font-desc"].connect (() => {
+                var desc = fixed_btn.get_font_desc ();
+                if (desc == null) return;
+                string fam = desc.get_family () ?? model.viewer.fixed_font_family;
+                int sz = desc.get_size () / Pango.SCALE;
+                if (sz == 0) sz = model.viewer.font_size;
+                if (sz < 6) sz = 6;
+                if (sz > 72) sz = 72;
+                dispatch (new ViewerFontChangedMessage (sz, model.viewer.font_family, fam));
+            });
+            fixed_row.append (fixed_btn);
+            vbox.append (fixed_row);
+
+            content.append (vbox);
 
             dialog.response.connect ((rid) => {
                 if (rid == Gtk.ResponseType.CLOSE || rid == Gtk.ResponseType.DELETE_EVENT) {
@@ -911,11 +1001,14 @@ private void setup_main_layout (AppModel model) {
             if (act_topics == null) return;
             bool visible = model.settings.show_topics ||
                            model.settings.show_index ||
-                           model.settings.show_search;
+                           model.settings.show_search ||
+                           model.settings.active_side_panel == 3;
             int active = model.settings.active_side_panel;
             act_topics.set_state (visible && active == 0);
             act_index.set_state (visible && active == 1);
             act_search.set_state (visible && active == 2);
+            if (act_bookmarks != null)
+                act_bookmarks.set_state (visible && active == 3);
         }
 
         private void toggle_find_bar () {
@@ -1089,7 +1182,7 @@ private void setup_main_layout (AppModel model) {
                 }
 
                 case AppMessageKind.TOGGLE_TOPICS_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search;
+                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
                     if (sidebar_box.visible)
                         sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
                     sync_panel_actions (model);
@@ -1097,7 +1190,7 @@ private void setup_main_layout (AppModel model) {
                 }
 
                 case AppMessageKind.TOGGLE_INDEX_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search;
+                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
                     if (sidebar_box.visible)
                         sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
                     sync_panel_actions (model);
@@ -1105,7 +1198,15 @@ private void setup_main_layout (AppModel model) {
                 }
 
                 case AppMessageKind.TOGGLE_SEARCH_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search;
+                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
+                    if (sidebar_box.visible)
+                        sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
+                    sync_panel_actions (model);
+                    break;
+                }
+
+                case AppMessageKind.TOGGLE_BOOKMARKS_PANEL: {
+                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
                     if (sidebar_box.visible)
                         sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
                     sync_panel_actions (model);
