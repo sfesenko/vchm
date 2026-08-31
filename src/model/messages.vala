@@ -299,8 +299,10 @@ namespace Vchm.Model {
     public class SearchDoneMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SEARCH_DONE; } }
         public Gee.ArrayList<SearchResult> results { get; private set; }
-        public SearchDoneMessage (Gee.ArrayList<SearchResult> results) {
+        public int tab_index { get; private set; }
+        public SearchDoneMessage (Gee.ArrayList<SearchResult> results, int tab_index = -1) {
             this.results = results;
+            this.tab_index = tab_index;
         }
     }
 

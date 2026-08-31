@@ -17,7 +17,6 @@ namespace Vchm {
     public class DocumentTab : Object {
         public Vchm.View.ViewerView view;
         public ViewerModel viewer = new ViewerModel ();
-        public SearchModel search = new SearchModel ();
         public HistoryModel? history = null;   // bound when a book attaches
         public string book_path = "";          // "" = placeholder, no book yet
         public string url = "/";
@@ -281,6 +280,10 @@ namespace Vchm {
             setup_drag_drop ();
 
             close_request.connect (() => {
+                // M1: flush per-book scroll for the active book before quit
+                if (active_tab >= 0 && active_tab < tabs.size) {
+                    tabs[active_tab].view.save_scroll (held_model ?? model);
+                }
                 // Flush geometry so a quit right after a resize still
                 // restores the final size.
                 save_geometry (model);
@@ -802,6 +805,10 @@ private void setup_main_layout (AppModel model) {
             tab.book_path = path;
             tab.view.book_path = tab.book_path;
             tab.history = ctx.history;
+            // Keep tab's ViewerModel in sync with BookContext.viewer (M2/M3:
+            // NAVIGATE_DONE routes via BookContext.viewer, so they must be
+            // the same object). Placeholder's viewer is replaced.
+            tab.viewer = ctx.viewer;
             // Per-book font override: prefer stored per-book size over global.
             int per_font = held_model.per_books.get_font_size (path, held_model.settings.font_size);
             if (per_font != held_model.viewer.font_size) {
@@ -848,6 +855,9 @@ private void setup_main_layout (AppModel model) {
         private void close_tab (DocumentTab tab) {
             int idx = tabs.index_of (tab);
             if (idx < 0) return;
+
+            // M1: persist scroll for the book being closed
+            tab.view.save_scroll (held_model);
 
             if (tabs.size == 1) {
                 // Last tab: drop its book and reset to an empty placeholder.
@@ -916,6 +926,13 @@ private void setup_main_layout (AppModel model) {
             // (line ~843) and attach_book_to_tab, which is the correct
             // source of truth for "this tab's last URL".
 
+            // M1: persist per-book scroll before leaving the tab; do it
+            // while held_model still points at the outgoing book so the
+            // async JS save targets the correct archive path.
+            if (active_tab >= 0 && active_tab < tabs.size) {
+                tabs[active_tab].view.save_scroll (held_model);
+            }
+
             // Flush the shared viewer slot into the outgoing tab's
             // per-tab viewer (the slot has been the active tab's
             // viewer all along because every code path writes there).
@@ -964,6 +981,14 @@ private void setup_main_layout (AppModel model) {
             // model.viewer reads in the update function see the
             // incoming tab's viewer state.
             held_model.viewer = tab.viewer;
+            // M6: sync WebView font to this tab's per-book viewer (other
+            // tabs may have different font sizes/families).
+            {
+                var s = tab.view.get_settings ();
+                s.default_font_size = tab.viewer.font_size;
+                s.default_font_family = tab.viewer.font_family;
+                s.monospace_font_family = tab.viewer.fixed_font_family;
+            }
 
             // Tell the model which tab is now active so NAVIGATE
             // messages dispatched from updateModel carry the right

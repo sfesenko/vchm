@@ -240,6 +240,13 @@ namespace Vchm.View {
             // Navigation truth lives in the model: NAVIGATE_DONE is dispatched
             // from the update function, not from WebKit load events, so that
             // history is pushed exactly once per navigation.
+            // M1: restore per-book scroll only after the page has painted;
+            // an Idle restore right after load_uri was overwritten by the
+            // engine's own scroll reset.
+            if (load_event == LoadEvent.FINISHED && pending_restore_y > 0) {
+                restore_scroll (pending_restore_y);
+                pending_restore_y = 0;
+            }
         }
 
         // Extract "/path/page.htm" from "chm://<book-basename>/path/page.htm".
@@ -279,9 +286,15 @@ namespace Vchm.View {
         }
 
         // Scroll persistence: save/restore per-book scroll via JS.
+        // pending_restore_y holds the y to restore once the page
+        // finishes loading; restoring via Idle before FINISHED was
+        // overwritten by WebKit's layout/scroll reset (M1).
+        private int pending_restore_y = 0;
+
         public void save_scroll (AppModel model) {
-            if (!model.file_open || model.chm_file.filename () == "") return;
-            string archive = model.chm_file.filename ();
+            string archive = book_path;
+            if (archive == "" ) archive = model.chm_file.filename ();
+            if (archive == "" || !model.file_open) return;
             // Query scrollY asynchronously; on result persist to per-book store.
             evaluate_javascript.begin ("window.scrollY", -1, null, null, null, (obj, res) => {
                 try {
@@ -311,18 +324,15 @@ namespace Vchm.View {
         // unloaded the page contents while the tab was off-screen.
         public void sync_if_needed (AppModel model, bool force = false) {
             var cur = model.viewer.current_url;
-            var book = model.chm_file.filename ();
+            var book = book_path != "" ? book_path : model.chm_file.filename ();
             if (model.file_open && cur.length > 0 &&
                 (force || cur != loaded_url || book != loaded_book)) {
                 loaded_url = cur;
                 loaded_book = book;
-                load_uri (page_uri (cur));
-                // Restore scroll after load (per-book). The page may not be
-                // painted yet; delay via idle and also via load_changed FINISHED.
+                // Stash per-book scroll to restore once FINISHED fires (M1)
                 int saved_y = model.per_books.get_scroll (book);
-                if (saved_y > 0) {
-                    GLib.Idle.add (() => { restore_scroll (saved_y); return GLib.Source.REMOVE; });
-                }
+                pending_restore_y = saved_y;
+                load_uri (page_uri (cur));
             }
         }
 

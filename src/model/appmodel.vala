@@ -13,6 +13,8 @@ namespace Vchm.Model {
         public TopicsModel topics = new TopicsModel ();
         public IndexModel index = new IndexModel ();
         public HistoryModel history = new HistoryModel ();
+        public SearchModel search = new SearchModel ();
+        public ViewerModel viewer = new ViewerModel ();
         public string title = "";
         public string home = "/";
         public bool history_navigation_in_progress = false;
@@ -46,12 +48,18 @@ namespace Vchm.Model {
             get { return _active_ctx != null ? _active_ctx.history : _scratch_history; }
             set { if (_active_ctx != null) _active_ctx.history = value; else _scratch_history = value; }
         }
-        public SearchModel search { get; private set; }
-        // The viewer is the active tab's per-tab ViewerModel. set
-        // changes the scratch slot; AppView.activate_tab_idx pushes
-        // the scratch into the outgoing tab and pulls the incoming
-        // tab's viewer into the scratch.
-        public ViewerModel viewer { get { return _scratch_viewer; } set { _scratch_viewer = value; } }
+        public SearchModel search {
+            get { return _active_ctx != null ? _active_ctx.search : _scratch_search; }
+            private set { if (_active_ctx != null) _active_ctx.search = value; else _scratch_search = value; }
+        }
+        private SearchModel _scratch_search = new SearchModel ();
+        // Per-tab viewer (per BookContext). Proxy so NAVIGATE/NAVIGATE_DONE
+        // writes target the correct book even if the user switches tabs
+        // mid-load (M2/M3). Scratch holds the placeholder tab's viewer.
+        public ViewerModel viewer {
+            get { return _active_ctx != null ? _active_ctx.viewer : _scratch_viewer; }
+            set { if (_active_ctx != null) _active_ctx.viewer = value; else _scratch_viewer = value; }
+        }
         private ViewerModel _scratch_viewer = new ViewerModel ();
         public SettingsModel settings { get; private set; }
         public BookmarkStore bookmarks { get; private set; }

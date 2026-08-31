@@ -134,18 +134,30 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.active_book = ctx;
 
             // Point the shared model at this book's containers.
+            // With H1 fix active_book is already set, so these proxy
+            // writes target ctx and are effectively no-ops (kept for
+            // clarity/back-compat).
             model.chm_file = ctx.chm_file;
             model.topics = ctx.topics;
             model.index = ctx.index;
             model.history = ctx.history;
             model.file_open = true;
 
+            // M4: if per-book last_url is stored, navigate there directly
+            // instead of home->saved duplicate history (home + saved).
+            string nav_url = done_msg.home_page;
+            string nav_title = done_msg.title;
+            string saved = model.per_books.get_last_url (done_msg.path);
+            if (saved != "" && saved != nav_url && ctx.chm_file.has_object (saved)) {
+                nav_url = saved;
+                nav_title = null; // let worker extract <title>/<h1> for that page
+            }
             // Panels were built on the open worker; here we just wire state.
-            model.viewer.navigate (done_msg.home_page, done_msg.title, done_msg.path);
+            model.viewer.navigate (nav_url, nav_title, done_msg.path);
 
             // Dispatch NAVIGATE to actually load the content
             // DO NOT add to history here - NAVIGATE_DONE will handle it
-            model.get_parent_dispatch () (new NavigateMessage (done_msg.home_page, done_msg.title, nav_tab_index));
+            model.get_parent_dispatch () (new NavigateMessage (nav_url, nav_title, nav_tab_index));
             
             // Add to recent files
             model.settings.add_recent_file (done_msg.path);
@@ -194,7 +206,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.NAVIGATE: {
             var nav_msg = (NavigateMessage) msg;
 
-            if (!model.file_open) break;
+            // M2/M3: route via tab_index so a tab-switch mid-load doesn't
+            // steal the snapshot/file or the viewer's intended_url slot.
+            BookContext? nav_ctx = null;
+            if (nav_msg.tab_index >= 0 && nav_msg.tab_index < model.books.size)
+                nav_ctx = model.books[nav_msg.tab_index];
+            if (nav_ctx == null) nav_ctx = model.active_book;
+            if (nav_ctx == null || !model.file_open) break;
 
             // Skip non-CHM targets
             if (nav_msg.url.has_prefix ("data:") || nav_msg.url == "about:blank" ||
@@ -207,18 +225,18 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // Replicates ViewerModel.navigate minus current_url: NAVIGATE_DONE
             // owns that field — setting it here would make the queued view
             // update fire a premature load_uri before fallback resolution.
-            model.viewer.intended_url = nav_msg.url;
-            model.viewer.current_title = nav_msg.title ?? "";
-            model.viewer.current_chm_file = model.chm_file.filename ();
-            model.viewer.loading = true;
-            model.viewer.error = null;
-            model.viewer.pending_html = null;
+            nav_ctx.viewer.intended_url = nav_msg.url;
+            nav_ctx.viewer.current_title = nav_msg.title ?? "";
+            nav_ctx.viewer.current_chm_file = nav_ctx.chm_file.filename ();
+            nav_ctx.viewer.loading = true;
+            nav_ctx.viewer.error = null;
+            nav_ctx.viewer.pending_html = null;
 
             // Snapshot model state on the main thread before spawning the worker
             // (the worker must not touch `model` — concurrent CLOSE/OPEN can
             // mutate it).
-            var snap_file = model.chm_file;
-            var snap_cur = model.viewer.current_url;
+            var snap_file = nav_ctx.chm_file;
+            var snap_cur = nav_ctx.viewer.current_url;
             var snap_url = nav_msg.url;
             var snap_title = nav_msg.title ?? "";
             var snap_tab_index = nav_msg.tab_index;
@@ -291,63 +309,49 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.NAVIGATE_DONE: {
             var done_msg = (NavigateDoneMessage) msg;
-            // The worker ran with a snap_file snapshot (the active
-            // tab at dispatch time). If the user switched tabs in the
-            // meantime, the shared model.chm_file now points at a
-            // different book. Use done_msg.tab_index to identify the
-            // original tab and write through its per-tab sub-models
-            // so history/topic-selection don't cross-attach.
+            // M2/M3: route via tab_index so history/topic/viewer writes
+            // target the originating book, not whichever is active now.
             int ti = done_msg.tab_index >= 0 ? done_msg.tab_index : model.active_tab_index;
             BookContext? target_ctx = null;
-            if (ti >= 0 && ti < model.books.size) {
-                // Find the BookContext whose chm_file matches the
-                // one we snapshotted (the worker used the active
-                // tab's chm_file at dispatch time).
-                var snap_path = done_msg.intended_url;
-                // The intended_url is the CHM path, not the file
-                // path; use a different signal: the BookContext
-                // that owned the snap_file is the one whose
-                // history/topics we'd write to. We don't have the
-                // file path in the message, so fall back to the
-                // current active_ctx when the user didn't switch.
-                target_ctx = model.active_book;
-            }
+            if (ti >= 0 && ti < model.books.size)
+                target_ctx = model.books[ti];
+            if (target_ctx == null) target_ctx = model.active_book;
+            if (target_ctx == null) break;
 
-            model.viewer.load_finished (true);
-            model.viewer.current_url = done_msg.url;
-            model.viewer.current_title = done_msg.title;
+            target_ctx.viewer.load_finished (true);
+            target_ctx.viewer.current_url = done_msg.url;
+            target_ctx.viewer.current_title = done_msg.title;
             // Use this navigation's own intended target for history (the
             // CHM path), not the data: URI — and not the shared
             // intended_url slot, which a newer in-flight navigation may
             // already have overwritten (review F7).
             var history_url = done_msg.intended_url;
-            model.viewer.intended_url = history_url;
+            target_ctx.viewer.intended_url = history_url;
 
-            if (model.history_navigation_in_progress) {
+            if (target_ctx.history_navigation_in_progress) {
                 // Back/forward: the entry already exists in history; pushing
                 // again would truncate the forward tail (review §4.6).
-                model.history_navigation_in_progress = false;
+                target_ctx.history_navigation_in_progress = false;
             } else {
-                // The user may have switched tabs between dispatch and
-                // done; route the history entry to the tab that
-                // OWNED the snap_file. The proxy returns the
-                // active tab's history when an active_ctx is set;
-                // for per-tab history isolation we need the
-                // BookContext directly. Without per-tab history
-                // sub-models (Phase 2 step 3+), fall back to the
-                // active tab's history and accept the cross-attach
-                // in the rare case of a tab switch during load.
-                model.history.add_entry (done_msg.title, history_url, model.chm_file.filename () ?? "");
+                target_ctx.history.add_entry (done_msg.title, history_url, target_ctx.chm_file.filename () ?? "");
             }
 
-            model.topics.selected_url = history_url;
-            model.topics.expand_path (history_url);
-            model.status_text = done_msg.title != "" ? done_msg.title : done_msg.url;
+            target_ctx.topics.selected_url = history_url;
+            target_ctx.topics.expand_path (history_url);
             // Persist per-book last page (for restore on next open)
             if (model.file_open) {
-                model.per_books.set_last_url (model.chm_file.filename (), history_url);
+                model.per_books.set_last_url (target_ctx.chm_file.filename (), history_url);
                 model.settings.per_book_rows = model.per_books.save ();
             }
+            // Global status reflects the ACTIVE tab only; don't clobber it
+            // with an inactive tab's load (user switched mid-load).
+            if (ti == model.active_tab_index || target_ctx == model.active_book) {
+                model.status_text = done_msg.title != "" ? done_msg.title : done_msg.url;
+            }
+            // Keep tab title in sync for the target book (view's tab bar
+            // reads from DocumentTab.title, but model also stores title in
+            // BookContext for window title fallback).
+            target_ctx.title = done_msg.title != "" ? done_msg.title : target_ctx.title;
             break;
         }
 
@@ -568,10 +572,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 // Snapshot query state and the archive on the main thread;
                 // the worker must not touch `model` (concurrent CLOSE_FILE
                 // can swap or close it mid-scan).
+                // M2/M3: capture originating tab so results route back even if
+                // the user switches tabs before the worker finishes.
                 var snap_file = model.chm_file;
                 var q = model.search.query;
                 bool ww = model.search.whole_words;
                 bool to = model.search.titles_only;
+                int snap_tab = model.active_tab_index;
 
                 var search_parent = model.get_parent_dispatch ();
                 cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
@@ -581,11 +588,11 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                         new GLib.Thread<void*> ("vchm-search", () => {
                             Gee.ArrayList<SearchResult> res;
                             snap_file.search (q, ww, to, out res);
-                            search_parent (new SearchDoneMessage (res));
+                            search_parent (new SearchDoneMessage (res, snap_tab));
                             return null;
                         });
                     } catch (GLib.Error e) {
-                        search_parent (new SearchDoneMessage (new Gee.ArrayList<SearchResult> ()));
+                        search_parent (new SearchDoneMessage (new Gee.ArrayList<SearchResult> (), snap_tab));
                     }
                 });
             }
@@ -594,9 +601,20 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.SEARCH_DONE: {
             var done_msg = (SearchDoneMessage) msg;
-            model.search.searching = false;
-            model.search.results = done_msg.results;
-            model.search.selected_index = -1;
+            // Route to the originating tab's search model (M2/M3)
+            BookContext? s_ctx = null;
+            if (done_msg.tab_index >= 0 && done_msg.tab_index < model.books.size)
+                s_ctx = model.books[done_msg.tab_index];
+            if (s_ctx == null) s_ctx = model.active_book;
+            if (s_ctx == null) {
+                model.search.searching = false;
+                model.search.results = done_msg.results;
+                model.search.selected_index = -1;
+            } else {
+                s_ctx.search.searching = false;
+                s_ctx.search.results = done_msg.results;
+                s_ctx.search.selected_index = -1;
+            }
             break;
         }
 
