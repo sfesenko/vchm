@@ -9,10 +9,12 @@ namespace Vchm.Model {
     public class Bookmark : Object {
         public string title { get; set; }
         public string url { get; set; }
+        public int64 created { get; set; }
 
-        public Bookmark (string title, string url) {
+        public Bookmark (string title, string url, int64 created = 0) {
             this.title = title;
             this.url = url;
+            this.created = created != 0 ? created : new DateTime.now_utc ().to_unix ();
         }
     }
 
@@ -51,14 +53,30 @@ namespace Vchm.Model {
             return sb.str;
         }
 
+        private static int64 now_sec () {
+            return new DateTime.now_utc ().to_unix ();
+        }
+
         public void load (string[] raw) {
             by_book.clear ();
             foreach (var row in raw) {
                 var parts = row.split (SEP);
-                if (parts.length != 3 || parts[0].length == 0) continue;
-                add (unescape_field (parts[0]),
-                     unescape_field (parts[2]),
-                     unescape_field (parts[1]));
+                if (parts.length < 3 || parts[0].length == 0) continue;
+                string archive = unescape_field (parts[0]);
+                string url = unescape_field (parts[1]);
+                string title = unescape_field (parts[2]);
+                int64 created = now_sec ();
+                if (parts.length >= 4) {
+                    int64.try_parse (parts[3], out created);
+                    if (created == 0) created = now_sec ();
+                }
+                // Use add_with_time to preserve timestamp
+                var list = for_book (archive);
+                // dedup by url
+                for (int i = list.size - 1; i >= 0; i--) {
+                    if (list[i].url == url) list.remove_at (i);
+                }
+                list.add (new Bookmark (title, url, created));
             }
         }
 
@@ -69,13 +87,35 @@ namespace Vchm.Model {
                 // book — dropping it beats emitting an unloadable row.
                 if (entry.key.length == 0) continue;
                 foreach (var b in entry.value) {
-                    out_list += "%s%s%s%s%s".printf (
+                    out_list += "%s%s%s%s%s%s%lld".printf (
                         escape_field (entry.key), SEP,
                         escape_field (b.url), SEP,
-                        escape_field (b.title));
+                        escape_field (b.title), SEP,
+                        b.created);
                 }
             }
             return out_list;
+        }
+
+        public bool prune (int expire_days) {
+            if (expire_days <= 0) return false;
+            int64 now = now_sec ();
+            int64 limit = expire_days * 86400;
+            bool any = false;
+            var to_remove_book = new Gee.ArrayList<string> ();
+            foreach (var entry in by_book.entries) {
+                var list = entry.value;
+                int before = list.size;
+                for (int i = list.size - 1; i >= 0; i--) {
+                    int64 age = now - list[i].created;
+                    if (age > limit) list.remove_at (i);
+                }
+                if (list.size != before) any = true;
+                if (list.size == 0) to_remove_book.add (entry.key);
+            }
+            foreach (var k in to_remove_book) by_book.unset (k);
+            if (to_remove_book.size > 0) any = true;
+            return any;
         }
 
         public Gee.ArrayList<Bookmark> for_book (string archive) {

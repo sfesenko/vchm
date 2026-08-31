@@ -250,15 +250,6 @@ namespace Vchm {
             set_title ("vCHM");
             set_default_size (model.settings.window_width, model.settings.window_height);
 
-            if (model.settings.window_x >= 0 && model.settings.window_y >= 0) {
-                // In GTK4, use Gdk.Display to position window
-                var display = Gdk.Display.get_default ();
-                if (display != null) {
-                    // We can't directly move in GTK4, but we can use default size/position
-                    // For now, we'll just not move as GTK4 handles positioning differently
-                }
-            }
-
             if (model.settings.window_maximized) {
                 maximize ();
             }
@@ -295,7 +286,6 @@ namespace Vchm {
             // window. Maximized state itself rides in its own setting.
             if (!visible || maximized || fullscreened) return;
             dispatch (new WindowStateChangedMessage (
-                model.settings.window_x, model.settings.window_y,
                 default_width, default_height));
         }
 
@@ -747,6 +737,29 @@ private void setup_main_layout (AppModel model) {
             });
             fixed_row.append (fixed_btn);
             vbox.append (fixed_row);
+
+            // TTL for per-book state (position/history/expanded)
+            var per_exp_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            per_exp_row.append (new Gtk.Label (_("Per-book history expiry (days, 0=keep):")) { xalign = 0, hexpand = true });
+            var per_exp_spin = new Gtk.SpinButton.with_range (0, 3650, 1);
+            per_exp_spin.value = model.settings.per_book_expire_days;
+            per_exp_spin.tooltip_text = _("Days after last access to keep per-book position, expanded sections and navigation history");
+            per_exp_spin.value_changed.connect (() => {
+                dispatch (new SetPerBookExpireMessage ((int) per_exp_spin.value));
+            });
+            per_exp_row.append (per_exp_spin);
+            vbox.append (per_exp_row);
+
+            var bm_exp_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
+            bm_exp_row.append (new Gtk.Label (_("Bookmarks expiry (days, 0=keep):")) { xalign = 0, hexpand = true });
+            var bm_exp_spin = new Gtk.SpinButton.with_range (0, 3650, 1);
+            bm_exp_spin.value = model.settings.bookmarks_expire_days;
+            bm_exp_spin.tooltip_text = _("Days after creation to keep bookmarks");
+            bm_exp_spin.value_changed.connect (() => {
+                dispatch (new SetBookmarksExpireMessage ((int) bm_exp_spin.value));
+            });
+            bm_exp_row.append (bm_exp_spin);
+            vbox.append (bm_exp_row);
 
             content.append (vbox);
 

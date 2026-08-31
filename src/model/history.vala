@@ -55,6 +55,14 @@ namespace Vchm.Model {
         }
 
         public void add_entry (string title, string url, string chm_file) {
+            // Dedup consecutive duplicate (per-book restore case)
+            if (entries.size > 0 && current_index >= 0 && current_index < entries.size) {
+                if (entries[current_index].url == url) {
+                    entries[current_index].title = title;
+                    entries[current_index].timestamp = new DateTime.now_local ();
+                    return;
+                }
+            }
             // Truncate forward history
             while (entries.size > current_index + 1) {
                 entries.remove_at (entries.size - 1);

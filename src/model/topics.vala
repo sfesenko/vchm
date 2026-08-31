@@ -326,5 +326,26 @@ namespace Vchm.Model {
                 item = item.parent;
             }
         }
+
+        public Gee.HashSet<string> collect_expanded () {
+            var acc = new Gee.HashSet<string> ();
+            if (root != null) collect_expanded_rec (root, acc);
+            return acc;
+        }
+
+        private void collect_expanded_rec (TopicsItem item, Gee.HashSet<string> acc) {
+            if (item.expanded && item.url != null && item.url.length > 0) acc.add (item.url);
+            foreach (var c in item.children) collect_expanded_rec (c, acc);
+        }
+
+        public void apply_expanded (Gee.HashSet<string> set) {
+            if (root == null) return;
+            apply_expanded_rec (root, set);
+        }
+
+        private void apply_expanded_rec (TopicsItem item, Gee.HashSet<string> set) {
+            if (item.url != null && item.url.length > 0) item.expanded = set.contains (item.url);
+            foreach (var c in item.children) apply_expanded_rec (c, set);
+        }
     }
 }

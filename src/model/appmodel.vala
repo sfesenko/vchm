@@ -130,6 +130,8 @@ namespace Vchm.Model {
             return GLib.File.new_for_path (path).get_path () ?? path;
         }
 
+        private Gee.ArrayQueue<string> _open_queue = new Gee.ArrayQueue<string> ();
+
         // Returns true if no other OPEN_FILE is running and no other
         // OPEN_FILE is queued for the same path. Marks both flags so
         // the next OPEN_FILE for any path is deferred.
@@ -147,12 +149,45 @@ namespace Vchm.Model {
             }
         }
 
+        public void enqueue_open (string path) {
+            string k = canon_open_key (path);
+            _open_mutex.lock ();
+            try {
+                if (_open_in_flight.contains (k)) return;
+                if (_open_queue.contains (k)) return;
+                _open_queue.offer (k);
+            } finally {
+                _open_mutex.unlock ();
+            }
+        }
+
         public void release_open (string path) {
             string k = canon_open_key (path);
             _open_mutex.lock ();
             try {
                 _open_in_flight.remove (k);
                 _any_open_in_flight = false;
+            } finally {
+                _open_mutex.unlock ();
+            }
+        }
+
+        // Release current slot and if queued paths remain, acquire the next
+        // one atomically and return it (caller should dispatch it).
+        public bool release_and_dequeue_next (string path, out string? next) {
+            string k = canon_open_key (path);
+            _open_mutex.lock ();
+            try {
+                _open_in_flight.remove (k);
+                if (!_open_queue.is_empty) {
+                    next = _open_queue.poll ();
+                    _open_in_flight.add (next);
+                    _any_open_in_flight = true;
+                    return true;
+                }
+                _any_open_in_flight = false;
+                next = null;
+                return false;
             } finally {
                 _open_mutex.unlock ();
             }
@@ -181,8 +216,10 @@ namespace Vchm.Model {
             settings = new SettingsModel ();
             bookmarks = new BookmarkStore ();
             bookmarks.load (settings.bookmark_rows);
+            if (bookmarks.prune (settings.bookmarks_expire_days)) settings.bookmark_rows = bookmarks.save ();
             per_books = new PerBookStore ();
             per_books.load (settings.per_book_rows);
+            if (per_books.prune (settings.per_book_expire_days)) settings.per_book_rows = per_books.save ();
 
             // Apply saved viewer settings
             viewer.font_size = settings.font_size;

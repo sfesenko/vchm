@@ -49,12 +49,9 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // truthful record of "this path is being opened"; the release
             // runs in the worker's finally.
             if (!model.try_acquire_open (path)) {
-                // Another open for the same path is mid-flight; defer.
-                var d = model.get_parent_dispatch ();
-                GLib.Timeout.add (150, () => {
-                    d (new OpenFileMessage (path));
-                    return GLib.Source.REMOVE;
-                });
+                // Another open in flight — FIFO queue, preserves order and
+                // avoids 150 ms poll thundering-herd (S2).
+                model.enqueue_open (path);
                 break;
             }
 
@@ -85,14 +82,21 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                                 open_parent (new OpenFileFailedMessage (path, "Failed to open CHM file"));
                             }
                         } finally {
-                            // Mutex is thread-safe; release can run off-main-thread.
-                            model.release_open (path);
+                            // FIFO drain: release and if queued, dispatch next.
+                            string? nxt = null;
+                            if (model.release_and_dequeue_next (path, out nxt) && nxt != null) {
+                                open_parent (new OpenFileMessage (nxt));
+                            }
                         }
                         return null;
                     });
                 } catch (GLib.Error e) {
-                    model.release_open (path);
+                    string? nxt2 = null;
+                    bool has_next = model.release_and_dequeue_next (path, out nxt2);
                     open_parent (new OpenFileFailedMessage (path, e.message));
+                    if (has_next && nxt2 != null) {
+                        open_parent (new OpenFileMessage (nxt2));
+                    }
                 }
             });
             break;
@@ -133,6 +137,24 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             model.active_book = ctx;
 
+            // M1: restore per-book history/expanded/selected before first nav.
+            // Prune already done at startup; refresh last_access.
+            string arch_path = ctx.chm_file.filename ();
+            if (model.per_books.has_book (arch_path)) {
+                Gee.ArrayList<HistoryEntry> h; int hi;
+                model.per_books.get_history (arch_path, out h, out hi);
+                if (h.size > 0) {
+                    ctx.history.entries.clear ();
+                    foreach (var e in h) ctx.history.entries.add (e);
+                    ctx.history.current_index = hi;
+                }
+                var exp = model.per_books.get_expanded (arch_path);
+                if (exp.size > 0) ctx.topics.apply_expanded (exp);
+                string sel = model.per_books.get_selected_url (arch_path);
+                if (sel != "" && ctx.chm_file.has_object (sel)) ctx.topics.selected_url = sel;
+            }
+            model.per_books.touch (arch_path);
+
             // Point the shared model at this book's containers.
             // With H1 fix active_book is already set, so these proxy
             // writes target ctx and are effectively no-ops (kept for
@@ -147,13 +169,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // instead of home->saved duplicate history (home + saved).
             string nav_url = done_msg.home_page;
             string nav_title = done_msg.title;
-            string saved = model.per_books.get_last_url (done_msg.path);
+            string saved = model.per_books.get_last_url (arch_path);
             if (saved != "" && saved != nav_url && ctx.chm_file.has_object (saved)) {
                 nav_url = saved;
                 nav_title = null; // let worker extract <title>/<h1> for that page
             }
             // Panels were built on the open worker; here we just wire state.
-            model.viewer.navigate (nav_url, nav_title, done_msg.path);
+            model.viewer.navigate (nav_url, nav_title, arch_path);
 
             // Dispatch NAVIGATE to actually load the content
             // DO NOT add to history here - NAVIGATE_DONE will handle it
@@ -338,9 +360,14 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             target_ctx.topics.selected_url = history_url;
             target_ctx.topics.expand_path (history_url);
-            // Persist per-book last page (for restore on next open)
+            // Persist per-book state: last_url, selected, expanded, history, last_access
             if (model.file_open) {
-                model.per_books.set_last_url (target_ctx.chm_file.filename (), history_url);
+                string ap = target_ctx.chm_file.filename ();
+                model.per_books.set_last_url (ap, history_url);
+                model.per_books.set_selected_url (ap, history_url);
+                model.per_books.set_expanded (ap, target_ctx.topics.collect_expanded ());
+                model.per_books.set_history (ap, target_ctx.history.entries, target_ctx.history.current_index);
+                model.per_books.prune (model.settings.per_book_expire_days);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             // Global status reflects the ACTIVE tab only; don't clobber it
@@ -483,6 +510,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.TOPICS_SELECTION_CHANGED: {
             var topics_msg = (TopicsSelectionChangedMessage) msg;
             model.topics.selected_url = topics_msg.url;
+            if (model.file_open) {
+                model.per_books.set_selected_url (model.chm_file.filename (), topics_msg.url);
+                model.settings.per_book_rows = model.per_books.save ();
+            }
             if (topics_msg.url != null) {
                 model.get_parent_dispatch () (new NavigateMessage (topics_msg.url, null, model.active_tab_index));
             }
@@ -495,6 +526,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 var item = model.topics.find_item_by_url (exp_msg.url);
                 if (item != null) {
                     item.expanded = true;
+                    if (model.file_open) {
+                        model.per_books.set_expanded (model.chm_file.filename (), model.topics.collect_expanded ());
+                        model.settings.per_book_rows = model.per_books.save ();
+                    }
                 }
             }
             break;
@@ -506,6 +541,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 var item = model.topics.find_item_by_url (col_msg.url);
                 if (item != null) {
                     item.expanded = false;
+                    if (model.file_open) {
+                        model.per_books.set_expanded (model.chm_file.filename (), model.topics.collect_expanded ());
+                        model.settings.per_book_rows = model.per_books.save ();
+                    }
                 }
             }
             break;
@@ -841,8 +880,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             var ws_msg = (WindowStateChangedMessage) msg;
             model.settings.window_width = ws_msg.width;
             model.settings.window_height = ws_msg.height;
-            model.settings.window_x = ws_msg.x;
-            model.settings.window_y = ws_msg.y;
             break;
         }
 
@@ -877,6 +914,26 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.SHOW_TOAST: {
             var toast_msg = (ShowToastMessage) msg;
             // View handles toast display
+            break;
+        }
+
+        case AppMessageKind.SET_PER_BOOK_EXPIRE: {
+            var m = (SetPerBookExpireMessage) msg;
+            model.settings.per_book_expire_days = m.days.clamp (0, 3650);
+            if (model.per_books.prune (model.settings.per_book_expire_days)) {
+                model.settings.per_book_rows = model.per_books.save ();
+            }
+            model.settings.save ();
+            break;
+        }
+
+        case AppMessageKind.SET_BOOKMARKS_EXPIRE: {
+            var m = (SetBookmarksExpireMessage) msg;
+            model.settings.bookmarks_expire_days = m.days.clamp (0, 3650);
+            if (model.bookmarks.prune (model.settings.bookmarks_expire_days)) {
+                model.settings.bookmark_rows = model.bookmarks.save ();
+            }
+            model.settings.save ();
             break;
         }
 

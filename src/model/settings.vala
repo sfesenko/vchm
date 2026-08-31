@@ -11,9 +11,7 @@ namespace Vchm.Model {
         private GLib.Settings _settings;
         private bool _schema_available = true;
 
-        // Window state
-        public int window_x { get; set; }
-        public int window_y { get; set; }
+        // Window state — S1: x/y dropped (GTK4 Wayland, compositor owned)
         public int window_width { get; set; }
         public int window_height { get; set; }
         public bool window_maximized { get; set; }
@@ -35,6 +33,8 @@ namespace Vchm.Model {
         public string[] recent_files { get; set; }
         public string[] bookmark_rows { get; set; }
         public string[] per_book_rows { get; set; }
+        public int per_book_expire_days { get; set; }
+        public int bookmarks_expire_days { get; set; }
 
         // Last opened directory
         public string last_opened_dir { get; set; }
@@ -65,8 +65,6 @@ namespace Vchm.Model {
             }
             
             try {
-                window_x = _settings.get_int ("window-x");
-                window_y = _settings.get_int ("window-y");
                 window_width = _settings.get_int ("window-width");
                 window_height = _settings.get_int ("window-height");
                 window_maximized = _settings.get_boolean ("window-maximized");
@@ -82,6 +80,11 @@ namespace Vchm.Model {
                 recent_files = _settings.get_strv ("recent-files");
             bookmark_rows = _settings.get_strv ("bookmarks");
                 per_book_rows = _settings.get_strv ("per-book-rows");
+                // TTL keys added with 180d default; missing on old installs → use 180
+                per_book_expire_days = 180;
+                bookmarks_expire_days = 180;
+                try { per_book_expire_days = _settings.get_int ("per-book-expire-days"); } catch (Error e) {}
+                try { bookmarks_expire_days = _settings.get_int ("bookmarks-expire-days"); } catch (Error e) {}
                 last_opened_dir = _settings.get_string ("last-opened-dir");
             } catch (GLib.Error e) {
                 stderr.printf ("Warning: Failed to load settings: %s\n", e.message);
@@ -90,8 +93,6 @@ namespace Vchm.Model {
         }
 
         private void apply_defaults () {
-            window_x = -1;
-            window_y = -1;
             window_width = 1024;
             window_height = 768;
             window_maximized = false;
@@ -107,6 +108,8 @@ namespace Vchm.Model {
             recent_files = new string[0];
             bookmark_rows = new string[0];
             per_book_rows = new string[0];
+            per_book_expire_days = 180;
+            bookmarks_expire_days = 180;
             last_opened_dir = "";
         }
 
@@ -114,13 +117,13 @@ namespace Vchm.Model {
         // rewriting GSettings when nothing actually changed.
         public string fingerprint () {
             var sb = new StringBuilder ();
-            sb.append_printf ("%d;%d;%d;%d;%b;%d;", window_x, window_y,
-                              window_width, window_height, window_maximized,
-                              sash_position);
+            sb.append_printf ("%d;%d;%b;%d;", window_width, window_height,
+                               window_maximized, sash_position);
             sb.append_printf ("%b;%b;%b;%b;%d;", show_topics, show_index,
                                show_search, show_bookmarks, active_side_panel);
             sb.append_printf ("%d;%s;%s;", font_size, font_family,
-                              fixed_font_family);
+                               fixed_font_family);
+            sb.append_printf ("%d;%d;", per_book_expire_days, bookmarks_expire_days);
             foreach (var f in recent_files) sb.append_printf ("%s,", f);
             sb.append ("|");
             foreach (var r in bookmark_rows) sb.append_printf ("%s,", r);
@@ -135,8 +138,6 @@ namespace Vchm.Model {
             if (!_schema_available) return;
             
             try {
-                _settings.set_int ("window-x", window_x);
-                _settings.set_int ("window-y", window_y);
                 _settings.set_int ("window-width", window_width);
                 _settings.set_int ("window-height", window_height);
                 _settings.set_boolean ("window-maximized", window_maximized);
@@ -149,6 +150,8 @@ namespace Vchm.Model {
                 _settings.set_int ("font-size", font_size);
                 _settings.set_string ("font-family", font_family);
                 _settings.set_string ("fixed-font-family", fixed_font_family);
+                _settings.set_int ("per-book-expire-days", per_book_expire_days);
+                _settings.set_int ("bookmarks-expire-days", bookmarks_expire_days);
                 _settings.set_strv ("recent-files", recent_files);
             _settings.set_strv ("bookmarks", bookmark_rows);
                 _settings.set_strv ("per-book-rows", per_book_rows);

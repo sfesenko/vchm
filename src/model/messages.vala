@@ -90,6 +90,9 @@ namespace Vchm.Model {
         APP_QUIT_INTERNAL,
         ABOUT_DIALOG,
         PREFERENCES_DIALOG,
+
+        SET_PER_BOOK_EXPIRE,
+        SET_BOOKMARKS_EXPIRE,
     }
 
     // ── Base class ──
@@ -451,12 +454,10 @@ namespace Vchm.Model {
     // ── Window ──
     public class WindowStateChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.WINDOW_STATE_CHANGED; } }
-        public int x { get; private set; }
-        public int y { get; private set; }
         public int width { get; private set; }
         public int height { get; private set; }
-        public WindowStateChangedMessage (int x, int y, int width, int height) {
-            this.x = x; this.y = y; this.width = width; this.height = height;
+        public WindowStateChangedMessage (int width, int height) {
+            this.width = width; this.height = height;
         }
     }
 
@@ -489,5 +490,17 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.SHOW_TOAST; } }
         public string message { get; private set; }
         public ShowToastMessage (string message) { this.message = message; }
+    }
+
+    public class SetPerBookExpireMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.SET_PER_BOOK_EXPIRE; } }
+        public int days { get; private set; }
+        public SetPerBookExpireMessage (int days) { this.days = days; }
+    }
+
+    public class SetBookmarksExpireMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.SET_BOOKMARKS_EXPIRE; } }
+        public int days { get; private set; }
+        public SetBookmarksExpireMessage (int days) { this.days = days; }
     }
 }
