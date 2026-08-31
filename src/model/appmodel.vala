@@ -126,15 +126,20 @@ namespace Vchm.Model {
             new Gee.HashSet<string> ();
         private bool _any_open_in_flight = false;
 
+        private string canon_open_key (string path) {
+            return GLib.File.new_for_path (path).get_path () ?? path;
+        }
+
         // Returns true if no other OPEN_FILE is running and no other
         // OPEN_FILE is queued for the same path. Marks both flags so
         // the next OPEN_FILE for any path is deferred.
         public bool try_acquire_open (string path) {
+            string k = canon_open_key (path);
             _open_mutex.lock ();
             try {
                 if (_any_open_in_flight) return false;
-                if (_open_in_flight.contains (path)) return false;
-                _open_in_flight.add (path);
+                if (_open_in_flight.contains (k)) return false;
+                _open_in_flight.add (k);
                 _any_open_in_flight = true;
                 return true;
             } finally {
@@ -143,9 +148,10 @@ namespace Vchm.Model {
         }
 
         public void release_open (string path) {
+            string k = canon_open_key (path);
             _open_mutex.lock ();
             try {
-                _open_in_flight.remove (path);
+                _open_in_flight.remove (k);
                 _any_open_in_flight = false;
             } finally {
                 _open_mutex.unlock ();

@@ -1376,6 +1376,9 @@ namespace Vchm.Model {
         uint16 tree_depth = UINT16_FROM_ARRAY (header, 0x18);
 
         if (node_len == 0 || node_len > MAX_UNIT_BYTES) return false;
+        // B-tree nodes are 2 KiB in practice; cap tighter to avoid 256 MB
+        // worker allocations from crafted archives (M5).
+        if (node_len > 64 * 1024) return false;
 
         string word = "";
         var buffer = new uint8[node_len];
