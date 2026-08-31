@@ -793,17 +793,15 @@ private void setup_main_layout (AppModel model) {
 
         // Bind a placeholder tab to a freshly opened book.
         private void attach_book_to_tab (DocumentTab tab, BookContext ctx,
-                                         string path, bool sync_now) {
+                                          string path, bool sync_now) {
             // Full path: the serving registry and chm:// URIs are keyed by
             // it, and two books may share a basename (review F5).
+            // H1: set active_book FIRST so proxied setters route to the
+            // new book instead of corrupting the previous BookContext.
+            held_model.active_book = ctx;
             tab.book_path = path;
             tab.view.book_path = tab.book_path;
             tab.history = ctx.history;
-            held_model.history = ctx.history;
-            held_model.chm_file = ctx.chm_file;
-            held_model.topics = ctx.topics;
-            held_model.index = ctx.index;
-            held_model.active_book = ctx;
             // Per-book font override: prefer stored per-book size over global.
             int per_font = held_model.per_books.get_font_size (path, held_model.settings.font_size);
             if (per_font != held_model.viewer.font_size) {
@@ -945,18 +943,20 @@ private void setup_main_layout (AppModel model) {
             var tab = tabs[num];
 
             // Restore incoming tab's book (if bound) into shared model.
+            // H1: active_book must be set before any proxied write so we
+            // don't corrupt the outgoing book's context.
             if (tab.book_path != "") {
                 var bk = CHMFile.by_path (tab.book_path);
                 foreach (var bctx in held_model.books) {
                     if (bctx.chm_file == bk) {
-                        held_model.chm_file = bctx.chm_file;
-                        held_model.topics = bctx.topics;
-                        held_model.index = bctx.index;
                         held_model.active_book = bctx;
                         break;
                     }
                 }
             }
+            // tab.history is the per-tab history; it should already be
+            // bctx.history if bound via attach_book_to_tab. Keep explicit
+            // flush AFTER active_book so it targets the new context.
             if (tab.history != null)
                 held_model.history = tab.history;
 
