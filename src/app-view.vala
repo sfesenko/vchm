@@ -202,12 +202,8 @@ namespace Vchm {
             // Bookmarks panel toggle — sidebar page 3
             bool show_bookmarks_init = false;
             if (held_model != null) {
-                // active_side_panel 3 == bookmarks visible; show_topics/index/search
-                // are exclusive, so bookmarks visibility is active==3 && any shown
-                show_bookmarks_init = held_model.settings.active_side_panel == 3 &&
-                    (held_model.settings.show_topics || held_model.settings.show_index || held_model.settings.show_search);
-                // Fallback: if no panel shown yet, keep hidden
-                // Also allow direct show_bookmarks flag if added later; for now derive
+                show_bookmarks_init = held_model.settings.show_bookmarks &&
+                    held_model.settings.active_side_panel == 3;
             }
             act_bookmarks = new GLib.SimpleAction.stateful (
                 ACTION_TOGGLE_BOOKMARKS, null, new Variant.boolean (show_bookmarks_init));
@@ -336,14 +332,14 @@ namespace Vchm {
         private void rebuild_header_recent_menu (AppModel model) {
             header_recent_menu.remove_all ();
             if (model.settings.recent_files.length == 0) {
-                header_recent_menu.append (_("No recent files"), "win.noop");
+                header_recent_menu.append (_("No recent files"), null);
                 return;
             }
             foreach (var f in model.settings.recent_files) {
                 string base_name = GLib.Path.get_basename (f);
-                // Action with string parameter
-                string action = "win.open-recent::" + f;
-                header_recent_menu.append (base_name, action);
+                var item = new GLib.MenuItem (base_name, null);
+                item.set_action_and_target_value ("win.open-recent", new GLib.Variant.string (f));
+                header_recent_menu.append_item (item);
             }
         }
 
@@ -351,13 +347,14 @@ namespace Vchm {
             if (file_recent_submenu == null) return;
             file_recent_submenu.remove_all ();
             if (held_model == null || held_model.settings.recent_files.length == 0) {
-                file_recent_submenu.append (_("No recent files"), "win.noop");
+                file_recent_submenu.append (_("No recent files"), null);
                 return;
             }
             foreach (var f in held_model.settings.recent_files) {
                 string base_name = GLib.Path.get_basename (f);
-                string action = "win.open-recent::" + f;
-                file_recent_submenu.append (base_name, action);
+                var item = new GLib.MenuItem (base_name, null);
+                item.set_action_and_target_value ("win.open-recent", new GLib.Variant.string (f));
+                file_recent_submenu.append_item (item);
             }
         }
 
@@ -1027,7 +1024,7 @@ private void setup_main_layout (AppModel model) {
             bool visible = model.settings.show_topics ||
                            model.settings.show_index ||
                            model.settings.show_search ||
-                           model.settings.active_side_panel == 3;
+                           model.settings.show_bookmarks;
             int active = model.settings.active_side_panel;
             act_topics.set_state (visible && active == 0);
             act_index.set_state (visible && active == 1);
