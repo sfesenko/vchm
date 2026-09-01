@@ -107,11 +107,21 @@ namespace Vchm.View {
             append (status_label);
         }
 
+        public void notify_active_changed (AppModel model) {
+            if (model.file_open) {
+                index_loaded_for = "";
+                rebuild_list (model);
+                var cur = model.active_book != null ? model.active_book : model.placeholder;
+                index_loaded_for = cur.chm_file.filename ();
+            }
+        }
+
         public void update (AppMessage msg, AppModel model) {
+            var idx_cur = model.active_book != null ? model.active_book : model.placeholder;
             switch (msg.kind) {
                 case AppMessageKind.OPEN_FILE_DONE:
                 case AppMessageKind.NAVIGATE_DONE: {
-                    var book = model.chm_file.filename ();
+                    var book = idx_cur.chm_file.filename ();
                     if (model.file_open && book != index_loaded_for) {
                         index_loaded_for = book;
                         rebuild_list (model);
@@ -120,13 +130,11 @@ namespace Vchm.View {
                 }
 
                 case AppMessageKind.TAB_ACTIVATED: {
-                    // Force a rebuild even if the active book hasn't
-                    // changed (e.g. OPEN_IN_NEW_TAB opened a second
-                    // tab for the same book, then user switched).
+                    // Legacy via Elmish; also via notify_active_changed
                     if (model.file_open) {
                         index_loaded_for = "";   // bypass the guard
                         rebuild_list (model);
-                        index_loaded_for = model.chm_file.filename ();
+                        index_loaded_for = idx_cur.chm_file.filename ();
                     }
                     break;
                 }
@@ -171,7 +179,8 @@ namespace Vchm.View {
 
         private void rebuild_list (AppModel model) {
             store.clear ();
-            foreach (var entry in model.index.entries) {
+            var idx_rb = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            foreach (var entry in idx_rb.entries) {
                 TreeIter iter;
                 store.append (out iter);
                 store.set (iter, 0, entry.name, 1, entry.url);
@@ -180,23 +189,25 @@ namespace Vchm.View {
         }
 
         private void update_status (AppModel model) {
-            if (model.index.entries.size > 0) {
+            var idx_st = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            if (idx_st.entries.size > 0) {
                 status_label.visible = false;
                 status_label.label = "";
             } else {
-                status_label.label = model.index.error ?? _("Index is empty");
+                status_label.label = idx_st.error ?? _("Index is empty");
                 status_label.visible = true;
             }
         }
 
         private void apply_filter (AppModel model) {
-            var filter = model.index.filter_text.down ();
+            var idx_af = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            var filter = idx_af.filter_text.down ();
             update_status (model);
             // Programmatic repopulation + cursor set must not look like
             // a user selection.
             syncing = true;
             store.clear ();
-            foreach (var entry in model.index.filtered_entries ()) {
+            foreach (var entry in idx_af.filtered_entries ()) {
                 TreeIter iter;
                 store.append (out iter);
                 store.set (iter, 0, entry.name, 1, entry.url);

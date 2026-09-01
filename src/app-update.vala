@@ -131,7 +131,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 ctx = dup;
                 nav_tab_index = dup_idx;
             } else {
-                model.books.add (ctx);
+                model.add_book (ctx);
                 nav_tab_index = model.books.size - 1;
             }
 
@@ -154,15 +154,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 if (sel != "" && ctx.chm_file.has_object (sel)) ctx.topics.selected_url = sel;
             }
             model.per_books.touch (arch_path);
-
-            // Point the shared model at this book's containers.
-            // With H1 fix active_book is already set, so these proxy
-            // writes target ctx and are effectively no-ops (kept for
-            // clarity/back-compat).
-            model.chm_file = ctx.chm_file;
-            model.topics = ctx.topics;
-            model.index = ctx.index;
-            model.history = ctx.history;
             model.file_open = true;
 
             // M4: if per-book last_url is stored, navigate there directly
@@ -175,7 +166,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 nav_title = null; // let worker extract <title>/<h1> for that page
             }
             // Panels were built on the open worker; here we just wire state.
-            model.viewer.navigate (nav_url, nav_title, arch_path);
+            ctx.viewer.navigate (nav_url, nav_title, arch_path);
 
             // Dispatch NAVIGATE to actually load the content
             // DO NOT add to history here - NAVIGATE_DONE will handle it
@@ -204,15 +195,18 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             foreach (var ctx in model.books) {
                 ctx.chm_file.close ();
             }
-            model.books.clear ();
-
-            model.chm_file.close ();
-            model.topics.clear ();
-            model.index.clear ();
-            model.search.clear ();
-            model.viewer.current_url = "/";
-            model.viewer.current_title = "";
-            model.viewer.current_chm_file = "";
+            model.clear_books ();
+            model.active_book = null;
+            // Reset placeholder for next open
+            model.placeholder.chm_file.close ();
+            model.placeholder.topics.clear ();
+            model.placeholder.index.clear ();
+            model.placeholder.search.clear ();
+            model.placeholder.viewer.current_url = "/";
+            model.placeholder.viewer.current_title = "";
+            model.placeholder.viewer.current_chm_file = "";
+            model.placeholder.history.clear ();
+            model.placeholder.history_navigation_in_progress = false;
             model.file_open = false;
             model.status_text = "Ready";
             break;
@@ -384,50 +378,56 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.NAVIGATE_FAILED: {
             var fail_msg = (NavigateFailedMessage) msg;
-            model.viewer.load_finished (false, fail_msg.error);
+            // NAVIGATE_FAILED is tab-agnostic (decide_policy may not know tab);
+            // route to active_book or placeholder.
+            var v_fail = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_fail.load_finished (false, fail_msg.error);
             // Otherwise the stuck flag makes every later navigation skip
             // its history push.
-            model.history_navigation_in_progress = false;
+            var h_fail = model.active_book != null ? model.active_book : model.placeholder;
+            h_fail.history_navigation_in_progress = false;
             model.show_toast ("Navigation failed: %s".printf (fail_msg.error));
             break;
         }
 
         case AppMessageKind.GO_BACK: {
+            var h_ctx = model.active_book != null ? model.active_book : model.placeholder;
             // A back/forward jump is still in flight; a second one would
             // desync the history cursor.
-            if (model.history_navigation_in_progress) break;
-            var entry = model.history.go_back ();
+            if (h_ctx.history_navigation_in_progress) break;
+            var entry = h_ctx.history.go_back ();
             if (entry != null) {
-                model.history_navigation_in_progress = true;
+                h_ctx.history_navigation_in_progress = true;
                 model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title, model.active_tab_index));
             }
             break;
         }
 
         case AppMessageKind.GO_FORWARD: {
-            if (model.history_navigation_in_progress) break;
-            var entry = model.history.go_forward ();
+            var h_ctx2 = model.active_book != null ? model.active_book : model.placeholder;
+            if (h_ctx2.history_navigation_in_progress) break;
+            var entry = h_ctx2.history.go_forward ();
             if (entry != null) {
-                model.history_navigation_in_progress = true;
+                h_ctx2.history_navigation_in_progress = true;
                 model.get_parent_dispatch () (new NavigateMessage (entry.url, entry.title, model.active_tab_index));
             }
             break;
         }
 
         case AppMessageKind.GO_HOME: {
-            
-            if (model.file_open) {
-                var home = model.chm_file.home_page ();
-                
-                model.get_parent_dispatch () (new NavigateMessage (home, model.chm_file.title (), model.active_tab_index));
+            var h_ctx3 = model.active_book;
+            if (model.file_open && h_ctx3 != null) {
+                var home = h_ctx3.chm_file.home_page ();
+                model.get_parent_dispatch () (new NavigateMessage (home, h_ctx3.chm_file.title (), model.active_tab_index));
             }
             break;
         }
 
         case AppMessageKind.CONTEXT_ID_NAVIGATE: {
             var cid_msg = (ContextIdNavigateMessage) msg;
-            if (model.file_open && model.chm_file.is_valid_cid (cid_msg.context_id)) {
-                var url = model.chm_file.get_page_by_cid (cid_msg.context_id);
+            var h_ctx4 = model.active_book;
+            if (model.file_open && h_ctx4 != null && h_ctx4.chm_file.is_valid_cid (cid_msg.context_id)) {
+                var url = h_ctx4.chm_file.get_page_by_cid (cid_msg.context_id);
                 model.get_parent_dispatch () (new NavigateMessage (url, null, model.active_tab_index));
             }
             break;
@@ -509,9 +509,12 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.TOPICS_SELECTION_CHANGED: {
             var topics_msg = (TopicsSelectionChangedMessage) msg;
-            model.topics.selected_url = topics_msg.url;
+            // B+hybrid: explicit TabModel (active_book) not proxy
+            var t_topics = model.active_book != null ? model.active_book.topics : model.topics;
+            t_topics.selected_url = topics_msg.url;
             if (model.file_open) {
-                model.per_books.set_selected_url (model.chm_file.filename (), topics_msg.url);
+                string ap = model.active_book != null ? model.active_book.chm_file.filename () : model.chm_file.filename ();
+                model.per_books.set_selected_url (ap, topics_msg.url);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             if (topics_msg.url != null) {
@@ -522,12 +525,14 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.TOPICS_ITEM_EXPANDED: {
             var exp_msg = (TopicsItemExpandedMessage) msg;
-            if (model.topics.root != null) {
-                var item = model.topics.find_item_by_url (exp_msg.url);
+            var t_topics2 = model.active_book != null ? model.active_book.topics : model.topics;
+            if (t_topics2.root != null) {
+                var item = t_topics2.find_item_by_url (exp_msg.url);
                 if (item != null) {
                     item.expanded = true;
                     if (model.file_open) {
-                        model.per_books.set_expanded (model.chm_file.filename (), model.topics.collect_expanded ());
+                        string ap2 = model.active_book != null ? model.active_book.chm_file.filename () : model.chm_file.filename ();
+                        model.per_books.set_expanded (ap2, t_topics2.collect_expanded ());
                         model.settings.per_book_rows = model.per_books.save ();
                     }
                 }
@@ -537,12 +542,14 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.TOPICS_ITEM_COLLAPSED: {
             var col_msg = (TopicsItemCollapsedMessage) msg;
-            if (model.topics.root != null) {
-                var item = model.topics.find_item_by_url (col_msg.url);
+            var t_topics3 = model.active_book != null ? model.active_book.topics : model.topics;
+            if (t_topics3.root != null) {
+                var item = t_topics3.find_item_by_url (col_msg.url);
                 if (item != null) {
                     item.expanded = false;
                     if (model.file_open) {
-                        model.per_books.set_expanded (model.chm_file.filename (), model.topics.collect_expanded ());
+                        string ap3 = model.active_book != null ? model.active_book.chm_file.filename () : model.chm_file.filename ();
+                        model.per_books.set_expanded (ap3, t_topics3.collect_expanded ());
                         model.settings.per_book_rows = model.per_books.save ();
                     }
                 }
@@ -552,17 +559,19 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.INDEX_FILTER_CHANGED: {
             var filter_msg = (IndexFilterChangedMessage) msg;
-            model.index.filter_text = filter_msg.filter;
+            var t_index = model.active_book != null ? model.active_book.index : model.index;
+            t_index.filter_text = filter_msg.filter;
             break;
         }
 
         case AppMessageKind.INDEX_SELECTION_CHANGED: {
             var index_msg = (IndexSelectionChangedMessage) msg;
+            var t_index2 = model.active_book != null ? model.active_book.index : model.index;
             // Find the index of the selected URL in filtered entries
-            var filtered = model.index.filtered_entries ();
+            var filtered = t_index2.filtered_entries ();
             for (int i = 0; i < filtered.size; i++) {
                 if (filtered[i].url == index_msg.url) {
-                    model.index.selected_index = i;
+                    t_index2.selected_index = i;
                     break;
                 }
             }
@@ -574,11 +583,12 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.INDEX_NEXT: {
-            if (model.index.entries.size > 0) {
-                var filtered = model.index.filtered_entries ();
+            var t_index3 = model.active_book != null ? model.active_book.index : model.index;
+            if (t_index3.entries.size > 0) {
+                var filtered = t_index3.filtered_entries ();
                 if (filtered.size > 0) {
-                    model.index.selected_index = (model.index.selected_index + 1) % filtered.size;
-                    var next_url = filtered[model.index.selected_index].url;
+                    t_index3.selected_index = (t_index3.selected_index + 1) % filtered.size;
+                    var next_url = filtered[t_index3.selected_index].url;
                     model.get_parent_dispatch () (new NavigateMessage (next_url, null, model.active_tab_index));
                 }
             }
@@ -586,11 +596,12 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.INDEX_PREV: {
-            if (model.index.entries.size > 0) {
-                var filtered = model.index.filtered_entries ();
+            var t_index4 = model.active_book != null ? model.active_book.index : model.index;
+            if (t_index4.entries.size > 0) {
+                var filtered = t_index4.filtered_entries ();
                 if (filtered.size > 0) {
-                    model.index.selected_index = (model.index.selected_index - 1 + filtered.size) % filtered.size;
-                    var prev_url = filtered[model.index.selected_index].url;
+                    t_index4.selected_index = (t_index4.selected_index - 1 + filtered.size) % filtered.size;
+                    var prev_url = filtered[t_index4.selected_index].url;
                     model.get_parent_dispatch () (new NavigateMessage (prev_url, null, model.active_tab_index));
                 }
             }
@@ -600,23 +611,26 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         // ── Search ───────────────────────────────────────────────────────────
         case AppMessageKind.SEARCH_QUERY_CHANGED: {
             var search_msg = (SearchQueryChangedMessage) msg;
-            model.search.query = search_msg.query;
+            var s_qc = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            s_qc.query = search_msg.query;
             break;
         }
 
         case AppMessageKind.SEARCH_EXECUTE: {
-            if (model.file_open && model.search.query != "") {
-                model.search.searching = true;
+            var s_exec = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            var snap_ctx = model.active_book;
+            if (model.file_open && snap_ctx != null && s_exec.query != "") {
+                s_exec.searching = true;
 
                 // Snapshot query state and the archive on the main thread;
                 // the worker must not touch `model` (concurrent CLOSE_FILE
                 // can swap or close it mid-scan).
                 // M2/M3: capture originating tab so results route back even if
                 // the user switches tabs before the worker finishes.
-                var snap_file = model.chm_file;
-                var q = model.search.query;
-                bool ww = model.search.whole_words;
-                bool to = model.search.titles_only;
+                var snap_file = snap_ctx.chm_file;
+                var q = s_exec.query;
+                bool ww = s_exec.whole_words;
+                bool to = s_exec.titles_only;
                 int snap_tab = model.active_tab_index;
 
                 var search_parent = model.get_parent_dispatch ();
@@ -645,25 +659,21 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             if (done_msg.tab_index >= 0 && done_msg.tab_index < model.books.size)
                 s_ctx = model.books[done_msg.tab_index];
             if (s_ctx == null) s_ctx = model.active_book;
-            if (s_ctx == null) {
-                model.search.searching = false;
-                model.search.results = done_msg.results;
-                model.search.selected_index = -1;
-            } else {
-                s_ctx.search.searching = false;
-                s_ctx.search.results = done_msg.results;
-                s_ctx.search.selected_index = -1;
-            }
+            if (s_ctx == null) s_ctx = model.placeholder;
+            s_ctx.search.searching = false;
+            s_ctx.search.results = done_msg.results;
+            s_ctx.search.selected_index = -1;
             break;
         }
 
         case AppMessageKind.SEARCH_SELECTION_CHANGED: {
             var search_msg = (SearchSelectionChangedMessage) msg;
-            if (model.search.results.size > 0) {
+            var s_ctx2 = model.active_book != null ? model.active_book : model.placeholder;
+            if (s_ctx2.search.results.size > 0) {
                 // Find index of the URL in results
-                for (int i = 0; i < model.search.results.size; i++) {
-                    if (model.search.results[i].url == search_msg.url) {
-                        model.search.selected_index = i;
+                for (int i = 0; i < s_ctx2.search.results.size; i++) {
+                    if (s_ctx2.search.results[i].url == search_msg.url) {
+                        s_ctx2.search.selected_index = i;
                         break;
                     }
                 }
@@ -675,11 +685,12 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.SEARCH_NEXT: {
-            if (model.search.results.size > 0) {
-                int next = (model.search.selected_index + 1) % model.search.results.size;
-                var result = model.search.results[next];
+            var s_ctx3 = model.active_book != null ? model.active_book : model.placeholder;
+            if (s_ctx3.search.results.size > 0) {
+                int next = (s_ctx3.search.selected_index + 1) % s_ctx3.search.results.size;
+                var result = s_ctx3.search.results[next];
                 if (result != null && result.url != null) {
-                    model.search.selected_index = next;
+                    s_ctx3.search.selected_index = next;
                     model.get_parent_dispatch () (new NavigateMessage (result.url, null, model.active_tab_index));
                 }
             }
@@ -687,11 +698,12 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.SEARCH_PREV: {
-            if (model.search.results.size > 0) {
-                int prev = (model.search.selected_index - 1 + model.search.results.size) % model.search.results.size;
-                var result = model.search.results[prev];
+            var s_ctx4 = model.active_book != null ? model.active_book : model.placeholder;
+            if (s_ctx4.search.results.size > 0) {
+                int prev = (s_ctx4.search.selected_index - 1 + s_ctx4.search.results.size) % s_ctx4.search.results.size;
+                var result = s_ctx4.search.results[prev];
                 if (result != null && result.url != null) {
-                    model.search.selected_index = prev;
+                    s_ctx4.search.selected_index = prev;
                     model.get_parent_dispatch () (new NavigateMessage (result.url, null, model.active_tab_index));
                 }
             }
@@ -700,37 +712,41 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.SEARCH_OPTIONS_CHANGED: {
             var opts_msg = (SearchOptionsChangedMessage) msg;
-            model.search.whole_words = opts_msg.whole_words;
-            model.search.titles_only = opts_msg.titles_only;
+            var s_ctx5 = model.active_book != null ? model.active_book : model.placeholder;
+            s_ctx5.search.whole_words = opts_msg.whole_words;
+            s_ctx5.search.titles_only = opts_msg.titles_only;
             break;
         }
 
         // ── Viewer ───────────────────────────────────────────────────────────
         case AppMessageKind.VIEWER_FONT_INCREASE: {
-            model.viewer.increase_font_size ();
-            model.settings.font_size = model.viewer.font_size;
-            if (model.file_open) {
-                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+            var v_ctx = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_ctx.increase_font_size ();
+            model.settings.font_size = v_ctx.font_size;
+            if (model.file_open && model.active_book != null) {
+                model.per_books.set_font_size (model.active_book.chm_file.filename (), v_ctx.font_size);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_DECREASE: {
-            model.viewer.decrease_font_size ();
-            model.settings.font_size = model.viewer.font_size;
-            if (model.file_open) {
-                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+            var v_ctx2 = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_ctx2.decrease_font_size ();
+            model.settings.font_size = v_ctx2.font_size;
+            if (model.file_open && model.active_book != null) {
+                model.per_books.set_font_size (model.active_book.chm_file.filename (), v_ctx2.font_size);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             break;
         }
 
         case AppMessageKind.VIEWER_FONT_RESET: {
-            model.viewer.reset_font_size ();
-            model.settings.font_size = model.viewer.font_size;
-            if (model.file_open) {
-                model.per_books.set_font_size (model.chm_file.filename (), model.viewer.font_size);
+            var v_ctx3 = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_ctx3.reset_font_size ();
+            model.settings.font_size = v_ctx3.font_size;
+            if (model.file_open && model.active_book != null) {
+                model.per_books.set_font_size (model.active_book.chm_file.filename (), v_ctx3.font_size);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             break;
@@ -738,14 +754,15 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.VIEWER_FONT_CHANGED: {
             var font_msg = (ViewerFontChangedMessage) msg;
-            model.viewer.font_size = font_msg.size;
-            model.viewer.font_family = font_msg.family;
-            model.viewer.fixed_font_family = font_msg.fixed_family;
+            var v_ctx4 = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_ctx4.font_size = font_msg.size;
+            v_ctx4.font_family = font_msg.family;
+            v_ctx4.fixed_font_family = font_msg.fixed_family;
             model.settings.font_size = font_msg.size;
             model.settings.font_family = font_msg.family;
             model.settings.fixed_font_family = font_msg.fixed_family;
-            if (model.file_open) {
-                model.per_books.set_font_size (model.chm_file.filename (), font_msg.size);
+            if (model.file_open && model.active_book != null) {
+                model.per_books.set_font_size (model.active_book.chm_file.filename (), font_msg.size);
                 model.settings.per_book_rows = model.per_books.save ();
             }
             break;
@@ -754,8 +771,9 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.VIEWER_FIND: {
             // State only — ViewerView reacts through the FindController.
             var find_msg = (ViewerFindMessage) msg;
-            model.viewer.find_text = find_msg.text;
-            model.viewer.find_case_sensitive = find_msg.case_sensitive;
+            var v_ctx5 = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            v_ctx5.find_text = find_msg.text;
+            v_ctx5.find_case_sensitive = find_msg.case_sensitive;
             break;
         }
 
@@ -772,11 +790,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         // ── History ──────────────────────────────────────────────────────────
         case AppMessageKind.BOOKMARK_ADD: {
-            var archive = model.chm_file.filename ();
-            if (!model.file_open || archive.length == 0) break;
+            var b_ctx = model.active_book;
+            if (b_ctx == null || !model.file_open) break;
+            var archive = b_ctx.chm_file.filename ();
+            if (archive.length == 0) break;
             model.bookmarks.add (archive,
-                                 model.viewer.current_title,
-                                 model.viewer.current_url);
+                                 b_ctx.viewer.current_title,
+                                 b_ctx.viewer.current_url);
             model.settings.bookmark_rows = model.bookmarks.save ();
             model.settings.save ();
             model.show_toast (_("Bookmark added"));
@@ -786,8 +806,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.BOOKMARK_REMOVE: {
             var rm = (BookmarkRemoveMessage) msg;
-            var archive = model.chm_file.filename ();
-            if (!model.file_open || archive.length == 0) break;
+            var b_ctx2 = model.active_book;
+            if (b_ctx2 == null || !model.file_open) break;
+            var archive = b_ctx2.chm_file.filename ();
+            if (archive.length == 0) break;
             bool ok = false;
             if (rm.url != "") ok = model.bookmarks.remove_by_url (archive, rm.url);
             if (!ok) ok = model.bookmarks.remove (archive, rm.title);
@@ -801,8 +823,10 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.BOOKMARK_RENAME: {
             var rn = (BookmarkRenameMessage) msg;
-            var archive = model.chm_file.filename ();
-            if (!model.file_open || archive.length == 0) break;
+            var b_ctx3 = model.active_book;
+            if (b_ctx3 == null || !model.file_open) break;
+            var archive = b_ctx3.chm_file.filename ();
+            if (archive.length == 0) break;
             if (rn.new_title.strip ().length == 0) break;
             if (model.bookmarks.rename (archive, rn.url, rn.new_title)) {
                 model.settings.bookmark_rows = model.bookmarks.save ();
@@ -825,16 +849,19 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
         case AppMessageKind.SET_ENCODING: {
             var em = (SetEncodingMessage) msg;
-            if (!model.file_open) break;
-            var target = model.viewer.current_url;
+            var enc_ctx = model.active_book;
+            if (!model.file_open || enc_ctx == null) break;
+            var target = enc_ctx.viewer.current_url;
 
             // Metadata re-decode is fast; panel rebuild scans hundreds of
             // pages — move that off the UI thread (pattern: OPEN_FILE).
-            model.chm_file.override_encoding (em.encoding);
+            enc_ctx.chm_file.override_encoding (em.encoding);
 
             // Snapshot on the main thread; the worker never touches `model`.
-            var snap_file = model.chm_file;
+            var snap_file = enc_ctx.chm_file;
             var snap_url = target;
+            int snap_tab = model.active_tab_index;
+            string snap_title = enc_ctx.chm_file.title ();
 
             var rebuild_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
@@ -846,17 +873,17 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                         var index = new IndexModel ();
                         topics.build_from_chm (snap_file);
                         index.build_from_chm (snap_file);
-                        rebuild_parent (new PanelsRebuiltMessage (topics, index));
+                        rebuild_parent (new PanelsRebuiltMessage (topics, index, snap_tab));
                         return null;
                     });
                 } catch (GLib.Error e) {
-                    rebuild_parent (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel ()));
+                    rebuild_parent (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel (), snap_tab));
                 }
             });
 
             model.get_parent_dispatch () (new NavigateMessage (target,
-                                              model.chm_file.title (),
-                                              model.active_tab_index));
+                                              snap_title,
+                                              snap_tab));
             model.show_toast (_("Encoding: %s").printf (
                 em.encoding == "auto" ? _("Automatic") : em.encoding));
             break;
@@ -865,13 +892,20 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         case AppMessageKind.PANELS_REBUILT: {
             var rb_msg = (PanelsRebuiltMessage) msg;
             if (!model.file_open) break;   // book closed mid-rebuild
-            model.topics = rb_msg.topics;
-            model.index = rb_msg.index;
+            BookContext? t_ctx = null;
+            if (rb_msg.tab_index >= 0 && rb_msg.tab_index < model.books.size)
+                t_ctx = model.books[rb_msg.tab_index];
+            else
+                t_ctx = model.active_book;
+            if (t_ctx == null) t_ctx = model.placeholder;
+            t_ctx.topics = rb_msg.topics;
+            t_ctx.index = rb_msg.index;
             break;
         }
 
         case AppMessageKind.HISTORY_CLEAR: {
-            model.history.clear ();
+            var h_ctx = model.active_book != null ? model.active_book : model.placeholder;
+            h_ctx.history.clear ();
             break;
         }
 

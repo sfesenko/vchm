@@ -154,16 +154,25 @@ namespace Vchm.View {
             append (status_label);
         }
 
+        public void notify_active_changed (AppModel model) {
+            var s_na = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            populating = true;
+            query_entry.text = s_na.query;
+            populating = false;
+            rebuild_results (model);
+        }
+
         public void update (AppMessage msg, AppModel model) {
+            var s_up = model.active_book != null ? model.active_book.search : model.placeholder.search;
             switch (msg.kind) {
                 case AppMessageKind.SEARCH_QUERY_CHANGED: {
                     // GTK4 set_text re-emits ::changed even for the same
                     // value — without the same-value guard + populating
                     // flag every programmatic set re-dispatched the
                     // message forever (review F1).
-                    if (query_entry.text != model.search.query) {
+                    if (query_entry.text != s_up.query) {
                         populating = true;
-                        query_entry.text = model.search.query;
+                        query_entry.text = s_up.query;
                         populating = false;
                     }
                     break;
@@ -174,7 +183,7 @@ namespace Vchm.View {
                     // new tab's search model (which is empty until the
                     // user runs a new search).
                     populating = true;
-                    query_entry.text = model.search.query;
+                    query_entry.text = s_up.query;
                     populating = false;
                     rebuild_results (model);
                     break;
@@ -191,8 +200,9 @@ namespace Vchm.View {
                 }
 
                 case AppMessageKind.SEARCH_OPTIONS_CHANGED: {
-                    whole_words_check.active = model.search.whole_words;
-                    titles_only_check.active = model.search.titles_only;
+                    var s_op = model.active_book != null ? model.active_book.search : model.placeholder.search;
+                    whole_words_check.active = s_op.whole_words;
+                    titles_only_check.active = s_op.titles_only;
                     break;
                 }
 
@@ -212,9 +222,10 @@ namespace Vchm.View {
         }
 
         private void rebuild_results (AppModel model) {
+            var s_rb = model.active_book != null ? model.active_book.search : model.placeholder.search;
             syncing = true;
             store.clear ();
-            foreach (var result in model.search.results) {
+            foreach (var result in s_rb.results) {
                 TreeIter iter;
                 store.append (out iter);
                 store.set (iter, 0, result.title, 1, result.url, 2, result.rank);
@@ -226,7 +237,7 @@ namespace Vchm.View {
                 status_label.visible = false;
                 status_label.label = "";
             } else {
-                status_label.label = _("No results for '%s'").printf (model.search.query);
+                status_label.label = _("No results for '%s'").printf (s_rb.query);
                 status_label.visible = true;
             }
             syncing = false;

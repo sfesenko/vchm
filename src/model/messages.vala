@@ -282,9 +282,11 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.PANELS_REBUILT; } }
         public TopicsModel topics { get; private set; }
         public IndexModel index { get; private set; }
-        public PanelsRebuiltMessage (TopicsModel topics, IndexModel index) {
+        public int tab_index { get; private set; }
+        public PanelsRebuiltMessage (TopicsModel topics, IndexModel index, int tab_index = -1) {
             this.topics = topics;
             this.index = index;
+            this.tab_index = tab_index;
         }
     }
 

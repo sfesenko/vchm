@@ -16,8 +16,6 @@ namespace Vchm {
     // so the F26 race on the shared model.viewer slot is gone.
     public class DocumentTab : Object {
         public Vchm.View.ViewerView view;
-        public ViewerModel viewer = new ViewerModel ();
-        public HistoryModel? history = null;   // bound when a book attaches
         public string book_path = "";          // "" = placeholder, no book yet
         public string url = "/";
         public string title = _("New page");
@@ -77,16 +75,12 @@ namespace Vchm {
                 return tabs[active_tab].view;
             }
         }
-        // Per-tab ViewerModel: the active tab owns its own viewer state,
-        // so two tabs can have different current_url/loading/intended_url
-        // without a shared-slot race. The update function's
-        // `model.viewer` reads come through this property in the view
-        // code; the update function in app-update.vala still uses
-        // model.viewer (the shared slot) for backward compatibility.
+        // Per-tab ViewerModel via BookContext (B+hybrid): active tab's viewer lives in AppModel.active_book.viewer
         public ViewerModel? active_viewer {
             get {
-                if (active_tab < 0 || active_tab >= tabs.size) return null;
-                return tabs[active_tab].viewer;
+                if (held_model == null) return null;
+                if (held_model.active_book != null) return held_model.active_book.viewer;
+                return held_model.placeholder.viewer;
             }
         }
         private ToolbarView toolbar_view;
@@ -132,6 +126,61 @@ namespace Vchm {
             // toolbar view exists (it is embedded as the title widget).
             setup_find_bar ();  // Must be called before setup_main_layout since find_revealer is used there
             setup_main_layout (model);
+            setup_notify_handlers (model);
+        }
+
+        private void setup_notify_handlers (AppModel model) {
+            // B+hybrid: sync UI via GObject notify (batched via freeze/thaw in ElmishProgram.process)
+            // instead of via queue_view_update single-slot. Keeps uni-direct: view -> ModelMsg -> model mutated -> notify -> view.
+            model.settings.notify["show-topics"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
+            model.settings.notify["show-index"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
+            model.settings.notify["show-search"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
+            model.settings.notify["show-bookmarks"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
+            model.settings.notify["active-side-panel"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
+            model.notify["active-book"].connect (() => {
+                // Active tab switched: rebuild sub-views from new BookContext
+                // (topics/index/search/bookmarks) — mirrors TAB_ACTIVATED handling but via notify
+                if (model.active_book != null) {
+                    topics_view.notify_active_changed (model);
+                    index_view.notify_active_changed (model);
+                    search_view.notify_active_changed (model);
+                    bookmarks_view.notify_active_changed (model);
+                }
+                update_sidebar_visibility (model);
+                sync_panel_actions (model);
+            });
+            model.notify["books"].connect (() => {
+                // Tabs collection changed (add/remove/reorder) — Notebook already managed imperatively in create_tab/close_tab/page_reordered,
+                // but notify ensures external model mutations (e.g. second-instance handoff) refresh titles.
+                refresh_recent_menus ();
+            });
+            model.notify["active-tab-index"].connect (() => {
+                // View's Notebook page is the source for active_tab, but model change (e.g. programmatic) should sync view
+                if (model.active_tab_index >= 0 && model.active_tab_index < tabs.size && model.active_tab_index != active_tab) {
+                    viewer_notebook.page = model.active_tab_index;
+                }
+            });
+            // Sash position: sync UI without queue_view_update Idle
+            model.settings.notify["sash-position"].connect (() => {
+                if (main_paned == null) return;
+                sash_updating = true;
+                main_paned.position = model.settings.sash_position;
+                sash_updating = false;
+            });
+            model.settings.notify["window-maximized"].connect (() => {
+                if (model.settings.window_maximized) maximize ();
+                else unmaximize ();
+            });
+        }
+
+        private void update_sidebar_visibility (AppModel model) {
+            if (sidebar_box == null || sidebar_notebook == null) return;
+            bool visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
+            sidebar_box.visible = visible;
+            if (visible) {
+                int p = model.settings.active_side_panel.clamp (0, 3);
+                if (sidebar_notebook.page != p) sidebar_notebook.page = p;
+            }
         }
 
         private void setup_actions () {
@@ -459,8 +508,8 @@ private void setup_main_layout (AppModel model) {
                     }
                     // If we matched all books, replace order
                     if (reordered.size == held_model.books.size) {
-                        held_model.books.clear ();
-                        foreach (var b in reordered) held_model.books.add (b);
+                        held_model.clear_books ();
+                        foreach (var b in reordered) held_model.add_book (b);
                     }
                 } else if (held_model != null) {
                     // Fallback: reorder by correlating moved tab's book
@@ -475,7 +524,7 @@ private void setup_main_layout (AppModel model) {
                             }
                         }
                         if (moved_ctx != null && from_b >= 0) {
-                            held_model.books.remove_at (from_b);
+                            held_model.remove_book_at (from_b);
                             // Compute insertion index: count bound tabs before page_num
                             int to_b = 0;
                             for (int i = 0; i < (int) page_num; i++) {
@@ -483,7 +532,7 @@ private void setup_main_layout (AppModel model) {
                             }
                             // also handle moving forward vs backward
                             if (to_b > held_model.books.size) to_b = held_model.books.size;
-                            held_model.books.insert (to_b, moved_ctx);
+                            held_model.insert_book (to_b, moved_ctx);
                         }
                     }
                 }
@@ -697,22 +746,24 @@ private void setup_main_layout (AppModel model) {
             vbox.append (info);
 
             // Proportional font picker (family + size) — GTK4 FontDialogButton
+            var pref_v = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
             var prop_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 12);
             prop_row.append (new Gtk.Label (_("Proportional font:")) { xalign = 0, hexpand = true });
             var prop_dialog = new Gtk.FontDialog ();
             var prop_btn = new Gtk.FontDialogButton (prop_dialog);
             prop_btn.tooltip_text = _("Choose proportional font");
-            var prop_desc = Pango.FontDescription.from_string ("%s %d".printf (model.viewer.font_family, model.viewer.font_size));
+            var prop_desc = Pango.FontDescription.from_string ("%s %d".printf (pref_v.font_family, pref_v.font_size));
             prop_btn.set_font_desc (prop_desc);
             prop_btn.notify["font-desc"].connect (() => {
                 var desc = prop_btn.get_font_desc ();
                 if (desc == null) return;
-                string fam = desc.get_family () ?? model.viewer.font_family;
+                var v_cur = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                string fam = desc.get_family () ?? v_cur.font_family;
                 int sz = desc.get_size () / Pango.SCALE;
-                if (sz == 0) sz = model.viewer.font_size;
+                if (sz == 0) sz = v_cur.font_size;
                 if (sz < 6) sz = 6;
                 if (sz > 72) sz = 72;
-                dispatch (new ViewerFontChangedMessage (sz, fam, model.viewer.fixed_font_family));
+                dispatch (new ViewerFontChangedMessage (sz, fam, v_cur.fixed_font_family));
             });
             prop_row.append (prop_btn);
             vbox.append (prop_row);
@@ -723,17 +774,18 @@ private void setup_main_layout (AppModel model) {
             var fixed_dialog = new Gtk.FontDialog ();
             var fixed_btn = new Gtk.FontDialogButton (fixed_dialog);
             fixed_btn.tooltip_text = _("Choose fixed-width font");
-            var fixed_desc = Pango.FontDescription.from_string ("%s %d".printf (model.viewer.fixed_font_family, model.viewer.font_size));
+            var fixed_desc = Pango.FontDescription.from_string ("%s %d".printf (pref_v.fixed_font_family, pref_v.font_size));
             fixed_btn.set_font_desc (fixed_desc);
             fixed_btn.notify["font-desc"].connect (() => {
                 var desc = fixed_btn.get_font_desc ();
                 if (desc == null) return;
-                string fam = desc.get_family () ?? model.viewer.fixed_font_family;
+                var v_cur2 = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                string fam = desc.get_family () ?? v_cur2.fixed_font_family;
                 int sz = desc.get_size () / Pango.SCALE;
-                if (sz == 0) sz = model.viewer.font_size;
+                if (sz == 0) sz = v_cur2.font_size;
                 if (sz < 6) sz = 6;
                 if (sz > 72) sz = 72;
-                dispatch (new ViewerFontChangedMessage (sz, model.viewer.font_family, fam));
+                dispatch (new ViewerFontChangedMessage (sz, v_cur2.font_family, fam));
             });
             fixed_row.append (fixed_btn);
             vbox.append (fixed_row);
@@ -814,15 +866,10 @@ private void setup_main_layout (AppModel model) {
             held_model.active_book = ctx;
             tab.book_path = path;
             tab.view.book_path = tab.book_path;
-            tab.history = ctx.history;
-            // Keep tab's ViewerModel in sync with BookContext.viewer (M2/M3:
-            // NAVIGATE_DONE routes via BookContext.viewer, so they must be
-            // the same object). Placeholder's viewer is replaced.
-            tab.viewer = ctx.viewer;
             // Per-book font override: prefer stored per-book size over global.
             int per_font = held_model.per_books.get_font_size (path, held_model.settings.font_size);
-            if (per_font != held_model.viewer.font_size) {
-                held_model.viewer.font_size = per_font;
+            if (per_font != ctx.viewer.font_size) {
+                ctx.viewer.font_size = per_font;
                 // Apply to WebKit immediately via existing viewer settings
                 tab.view.get_settings ().default_font_size = per_font;
             }
@@ -831,12 +878,12 @@ private void setup_main_layout (AppModel model) {
             // current navigation already set intended_url.
             string saved_url = held_model.per_books.get_last_url (path);
             string target_url = ctx.home;
-            if (saved_url != "" && saved_url != ctx.home && held_model.chm_file.has_object (saved_url)) {
+            if (saved_url != "" && saved_url != ctx.home && ctx.chm_file.has_object (saved_url)) {
                 target_url = saved_url;
                 tab.url = target_url;
                 if (sync_now) {
-                    held_model.viewer.current_url = target_url;
-                    held_model.viewer.intended_url = target_url;
+                    ctx.viewer.current_url = target_url;
+                    ctx.viewer.intended_url = target_url;
                 } else {
                     // The OPEN_FILE_DONE dispatch will NAVIGATE to home;
                     // override that by updating the pending navigation's target
@@ -856,9 +903,9 @@ private void setup_main_layout (AppModel model) {
             tab.title = ctx.title;
             tab.title_label.set_text (ctx.title);
             if (sync_now && saved_url == "") {
-                held_model.viewer.current_url = ctx.home;
-                held_model.viewer.current_title = ctx.title;
-                held_model.viewer.intended_url = ctx.home;
+                ctx.viewer.current_url = ctx.home;
+                ctx.viewer.current_title = ctx.title;
+                ctx.viewer.intended_url = ctx.home;
             }
         }
 
@@ -882,7 +929,7 @@ private void setup_main_layout (AppModel model) {
                 // Remove BookContext matching this tab
                 for (int i = 0; i < held_model.books.size; i++) {
                     if (held_model.books[i].chm_file.filename () == tab.book_path) {
-                        held_model.books.remove_at (i);
+                        held_model.remove_book_at (i);
                         break;
                     }
                 }
@@ -892,7 +939,7 @@ private void setup_main_layout (AppModel model) {
                 if (held_model.books.size == 0) {
                     held_model.file_open = false;
                     held_model.active_book = null;
-                    held_model.chm_file.close ();
+                    held_model.placeholder.chm_file.close ();
                 } else if (held_model.active_book != null &&
                            held_model.active_book.chm_file.filename () == tab.book_path) {
                     // Active book was closed but other books remain — will be
@@ -943,35 +990,12 @@ private void setup_main_layout (AppModel model) {
                 tabs[active_tab].view.save_scroll (held_model);
             }
 
-            // Flush the shared viewer slot into the outgoing tab's
-            // per-tab viewer (the slot has been the active tab's
-            // viewer all along because every code path writes there).
-            // Then pull the incoming tab's viewer back into the slot
-            // so model.viewer reads in the update function see the
-            // incoming tab's state.
-            if (active_tab >= 0 && active_tab < tabs.size) {
-                var old_tab = tabs[active_tab];
-                if (old_tab.viewer == held_model.viewer) {
-                    // Already the same reference; nothing to do.
-                } else {
-                    // Copy scratch state into the outgoing tab.
-                    old_tab.viewer.current_url = held_model.viewer.current_url;
-                    old_tab.viewer.current_title = held_model.viewer.current_title;
-                    old_tab.viewer.intended_url = held_model.viewer.intended_url;
-                    old_tab.viewer.loading = held_model.viewer.loading;
-                    old_tab.viewer.error = held_model.viewer.error;
-                    old_tab.viewer.pending_html = held_model.viewer.pending_html;
-                    old_tab.viewer.find_text = held_model.viewer.find_text;
-                    old_tab.viewer.find_case_sensitive = held_model.viewer.find_case_sensitive;
-                }
-            }
-
             active_tab = num;
             var tab = tabs[num];
 
             // Restore incoming tab's book (if bound) into shared model.
-            // H1: active_book must be set before any proxied write so we
-            // don't corrupt the outgoing book's context.
+            // B+hybrid: active_book is the source of per-tab viewer/history/topics etc.
+            // No separate DocumentTab.viewer/history to flush — they live in BookContext.
             if (tab.book_path != "") {
                 var bk = CHMFile.by_path (tab.book_path);
                 foreach (var bctx in held_model.books) {
@@ -980,24 +1004,20 @@ private void setup_main_layout (AppModel model) {
                         break;
                     }
                 }
+            } else {
+                // Placeholder tab: no book yet, keep active_book null and use scratch viewer
+                held_model.active_book = null;
             }
-            // tab.history is the per-tab history; it should already be
-            // bctx.history if bound via attach_book_to_tab. Keep explicit
-            // flush AFTER active_book so it targets the new context.
-            if (tab.history != null)
-                held_model.history = tab.history;
 
-            // Swap the per-tab ViewerModel in for the shared slot so
-            // model.viewer reads in the update function see the
-            // incoming tab's viewer state.
-            held_model.viewer = tab.viewer;
+            // Viewer/history now via BookContext; no swap needed.
             // M6: sync WebView font to this tab's per-book viewer (other
             // tabs may have different font sizes/families).
             {
                 var s = tab.view.get_settings ();
-                s.default_font_size = tab.viewer.font_size;
-                s.default_font_family = tab.viewer.font_family;
-                s.monospace_font_family = tab.viewer.fixed_font_family;
+                var v_act = held_model.active_book != null ? held_model.active_book.viewer : held_model.placeholder.viewer;
+                s.default_font_size = v_act.font_size;
+                s.default_font_family = v_act.font_family;
+                s.monospace_font_family = v_act.fixed_font_family;
             }
 
             // Tell the model which tab is now active so NAVIGATE
@@ -1171,17 +1191,18 @@ private void setup_main_layout (AppModel model) {
                     // Pages without their own <title> (metadata-poor
                     // books) must not blank the window title to
                     // "vCHM - " — keep the book title instead.
+                    var title_src = model.active_book != null ? model.active_book : model.placeholder;
                     string win_title = done_msg.title != ""
                         ? done_msg.title
-                        : (model.chm_file.title () != ""
-                           ? model.chm_file.title ()
-                           : done_msg.url);
+                        : (title_src.chm_file.title () != ""
+                            ? title_src.chm_file.title ()
+                            : done_msg.url);
                     set_title ("vCHM - %s".printf (win_title));
 
                     // Coalescing race guard: if the active book lost its
                     // OPEN_FILE_DONE attach, bind it to a tab now.
                     if (held_model.active_book != null && held_model.file_open) {
-                        var apath = held_model.chm_file.filename ();
+                        var apath = held_model.active_book.chm_file.filename ();
                         if (tab_for_book (apath) == null &&
                             tabs[active_tab].book_path == "") {
                             attach_book_to_tab (tabs[active_tab],
@@ -1200,7 +1221,11 @@ private void setup_main_layout (AppModel model) {
                     int ti = done_msg.tab_index >= 0 ? done_msg.tab_index : active_tab;
                     if (ti >= 0 && ti < tabs.size) {
                         var tab = tabs[ti];
-                        tab.url = model.viewer.current_url;
+                        // Find the tab's viewer (per-book) if possible, else active/placeholder
+                        BookContext? t_ctx = null;
+                        if (ti >= 0 && ti < model.books.size) t_ctx = model.books[ti];
+                        var v_cur = t_ctx != null ? t_ctx.viewer : (model.active_book != null ? model.active_book.viewer : model.placeholder.viewer);
+                        tab.url = v_cur.current_url;
                         // Tab label: prefer the book title (set by
                         // attach_book_to_tab) over the page title so
                         // pages with empty <title> or generic titles
@@ -1216,50 +1241,15 @@ private void setup_main_layout (AppModel model) {
                     break;
                 }
 
-                case AppMessageKind.TOGGLE_TOPICS_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
-                    if (sidebar_box.visible)
-                        sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
-                    sync_panel_actions (model);
+                case AppMessageKind.TOGGLE_TOPICS_PANEL:
+                case AppMessageKind.TOGGLE_INDEX_PANEL:
+                case AppMessageKind.TOGGLE_SEARCH_PANEL:
+                case AppMessageKind.TOGGLE_BOOKMARKS_PANEL:
+                case AppMessageKind.SET_ACTIVE_SIDE_PANEL:
+                case AppMessageKind.SET_SASH_POSITION:
+                    // B+hybrid: handled via GObject notify (freeze/thaw batched) in setup_notify_handlers,
+                    // not via queue_view_update Idle. Keeping updateView for these would be 1 frame late.
                     break;
-                }
-
-                case AppMessageKind.TOGGLE_INDEX_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
-                    if (sidebar_box.visible)
-                        sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
-                    sync_panel_actions (model);
-                    break;
-                }
-
-                case AppMessageKind.TOGGLE_SEARCH_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
-                    if (sidebar_box.visible)
-                        sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
-                    sync_panel_actions (model);
-                    break;
-                }
-
-                case AppMessageKind.TOGGLE_BOOKMARKS_PANEL: {
-                    sidebar_box.visible = model.settings.show_topics || model.settings.show_index || model.settings.show_search || model.settings.show_bookmarks;
-                    if (sidebar_box.visible)
-                        sidebar_notebook.page = model.settings.active_side_panel.clamp (0, 3);
-                    sync_panel_actions (model);
-                    break;
-                }
-
-                case AppMessageKind.SET_ACTIVE_SIDE_PANEL: {
-                    sidebar_notebook.page = model.settings.active_side_panel;
-                    sync_panel_actions (model);
-                    break;
-                }
-
-                case AppMessageKind.SET_SASH_POSITION: {
-                    sash_updating = true;
-                    main_paned.position = model.settings.sash_position;
-                    sash_updating = false;
-                    break;
-                }
 
                 case AppMessageKind.SHOW_TOAST: {
                     var toast_msg = (ShowToastMessage) msg;

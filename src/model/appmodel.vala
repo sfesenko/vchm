@@ -9,79 +9,101 @@ namespace Vchm.Model {
     // One opened archive with everything derived from it. Lives at
     // namespace scope so messages can carry it between worker and UI.
     public class BookContext : Object {
-        public CHMFile chm_file = new CHMFile ();
-        public TopicsModel topics = new TopicsModel ();
-        public IndexModel index = new IndexModel ();
-        public HistoryModel history = new HistoryModel ();
-        public SearchModel search = new SearchModel ();
-        public ViewerModel viewer = new ViewerModel ();
-        public string title = "";
-        public string home = "/";
-        public bool history_navigation_in_progress = false;
+        public CHMFile chm_file { get; set; default = new CHMFile (); }
+        public TopicsModel topics { get; set; default = new TopicsModel (); }
+        public IndexModel index { get; set; default = new IndexModel (); }
+        public HistoryModel history { get; set; default = new HistoryModel (); }
+        public SearchModel search { get; set; default = new SearchModel (); }
+        public ViewerModel viewer { get; set; default = new ViewerModel (); }
+        public string title { get; set; default = ""; }
+        public string home { get; set; default = "/"; }
+        public bool history_navigation_in_progress { get; set; default = false; }
     }
 
     public class AppModel : Object {
-        // Sub-models. These were shared pointer-swapped slots; Phase 2
-        // makes them proxy to whichever tab is currently active. The
-        // active tab is owned by AppView (a GTK layer), so we go
-        // through a delegate that AppView sets in build_ui.
-        //
-        // Proxy accessors (chm_file, topics, index, history, viewer,
-        // search) read from the active tab; writes go to a scratch
-        // slot that the view flushes on tab activation. The scratch
-        // pattern keeps the existing view/update code working while
-        // the real per-tab state lives in DocumentTab.
+        // B+hybrid TabModel: each BookContext owns its sub-models (chm_file,
+        // topics, index, history, search, viewer). AppModel owns the list
+        // of tabs and the active_book pointer. A single placeholder
+        // BookContext backs the proxy getters when no book is open (initial
+        // window, last tab closed). This replaces the old separate
+        // _scratch_* slots and makes TabModel the owner; proxy getters just
+        // delegate to current_ctx for compat during migration (new code
+        // should use model.active_book.* explicitly).
         private BookContext? _active_ctx = null;
+        private BookContext _placeholder = new BookContext ();
+        public BookContext placeholder { get { return _placeholder; } }
+        public BookContext current_ctx { get { return _active_ctx ?? _placeholder; } }
         public CHMFile chm_file {
-            get { return _active_ctx != null ? _active_ctx.chm_file : _scratch_chm; }
-            set { if (_active_ctx != null) _active_ctx.chm_file = value; else _scratch_chm = value; }
+            get { return current_ctx.chm_file; }
+            set { current_ctx.chm_file = value; }
         }
         public TopicsModel topics {
-            get { return _active_ctx != null ? _active_ctx.topics : _scratch_topics; }
-            set { if (_active_ctx != null) _active_ctx.topics = value; else _scratch_topics = value; }
+            get { return current_ctx.topics; }
+            set { current_ctx.topics = value; }
         }
         public IndexModel index {
-            get { return _active_ctx != null ? _active_ctx.index : _scratch_index; }
-            set { if (_active_ctx != null) _active_ctx.index = value; else _scratch_index = value; }
+            get { return current_ctx.index; }
+            set { current_ctx.index = value; }
         }
         public HistoryModel history {
-            get { return _active_ctx != null ? _active_ctx.history : _scratch_history; }
-            set { if (_active_ctx != null) _active_ctx.history = value; else _scratch_history = value; }
+            get { return current_ctx.history; }
+            set { current_ctx.history = value; }
         }
         public SearchModel search {
-            get { return _active_ctx != null ? _active_ctx.search : _scratch_search; }
-            private set { if (_active_ctx != null) _active_ctx.search = value; else _scratch_search = value; }
+            get { return current_ctx.search; }
+            private set { current_ctx.search = value; }
         }
-        private SearchModel _scratch_search = new SearchModel ();
-        // Per-tab viewer (per BookContext). Proxy so NAVIGATE/NAVIGATE_DONE
-        // writes target the correct book even if the user switches tabs
-        // mid-load (M2/M3). Scratch holds the placeholder tab's viewer.
+        // Per-tab viewer (per BookContext). Proxy delegates to current_ctx.
         public ViewerModel viewer {
-            get { return _active_ctx != null ? _active_ctx.viewer : _scratch_viewer; }
-            set { if (_active_ctx != null) _active_ctx.viewer = value; else _scratch_viewer = value; }
+            get { return current_ctx.viewer; }
+            set { current_ctx.viewer = value; }
         }
-        private ViewerModel _scratch_viewer = new ViewerModel ();
         public SettingsModel settings { get; private set; }
         public BookmarkStore bookmarks { get; private set; }
         public PerBookStore per_books { get; private set; }
 
-        // Scratch slots used during a model update; the view flushes
-        // them into the active tab on tab activation. Keeping the
-        // scratch makes the existing chm_file/topics/index/history
-        // pointer-swap pattern in OPEN_FILE_DONE transparent.
-        private CHMFile _scratch_chm = new CHMFile ();
-        private TopicsModel _scratch_topics = new TopicsModel ();
-        private IndexModel _scratch_index = new IndexModel ();
-        private HistoryModel _scratch_history = new HistoryModel ();
-
         // All opened books; [0] mirrors the "active" pointers below.
-        public Gee.ArrayList<BookContext> books =
-            new Gee.ArrayList<BookContext> ();
+        // B+hybrid: tabs is the hierarchical collection; books kept as alias for compat.
+        private Gee.ArrayList<BookContext> _books = new Gee.ArrayList<BookContext> ();
+        public Gee.ArrayList<BookContext> books {
+            get { return _books; }
+            set { _books = value; notify_property ("books"); notify_property ("tabs"); }
+        }
+        public Gee.ArrayList<BookContext> tabs {
+            get { return _books; }
+        }
         public BookContext? active_book {
             get { return _active_ctx; }
-            set { _active_ctx = value; }
+            set {
+                if (_active_ctx == value) return;
+                _active_ctx = value;
+                // Keep active_tab_index in sync with active_book
+                if (value != null) {
+                    int idx = _books.index_of (value);
+                    if (idx >= 0 && idx != _active_tab_index) {
+                        _active_tab_index = idx;
+                        notify_property ("active-tab-index");
+                    }
+                }
+                // Notify proxy properties whose getter changes with active_book
+                notify_property ("active-book");
+                notify_property ("chm-file");
+                notify_property ("topics");
+                notify_property ("index");
+                notify_property ("history");
+                notify_property ("search");
+                notify_property ("viewer");
+                notify_property ("history-navigation-in-progress");
+                notify_property ("current-tab");
+            }
         }
-
+        public BookContext? current_tab {
+            owned get {
+                if (_active_tab_index >= 0 && _active_tab_index < _books.size) return _books[_active_tab_index];
+                return _active_ctx;
+            }
+        }
+        private int _active_tab_index = -1;
         // Index of the currently active tab in AppView.tabs[]. Set
         // by AppView.activate_tab_idx. Read by app-update when
         // dispatching NAVIGATE so the resulting NavigateMessage
@@ -90,7 +112,62 @@ namespace Vchm.Model {
         // the active tab), but the tab_index lets NAVIGATE_DONE
         // route its writes to the right tab even if the user has
         // switched tabs in the meantime.
-        public int active_tab_index { get; set; }
+        public int active_tab_index {
+            get { return _active_tab_index; }
+            set {
+                if (_active_tab_index == value) return;
+                _active_tab_index = value;
+                // Sync active_book to match index without recursion
+                if (value >= 0 && value < _books.size) {
+                    var b = _books[value];
+                    if (_active_ctx != b) {
+                        _active_ctx = b;
+                        notify_property ("active-book");
+                        notify_property ("chm-file");
+                        notify_property ("topics");
+                        notify_property ("index");
+                        notify_property ("history");
+                        notify_property ("search");
+                        notify_property ("viewer");
+                        notify_property ("history-navigation-in-progress");
+                        notify_property ("current-tab");
+                    }
+                }
+                notify_property ("active-tab-index");
+                notify_property ("current-tab");
+            }
+        }
+
+        // B+hybrid helpers that keep notify in sync
+        public void add_book (BookContext ctx) {
+            _books.add (ctx);
+            notify_property ("books");
+            notify_property ("tabs");
+        }
+        public void insert_book (int idx, BookContext ctx) {
+            _books.insert (idx, ctx);
+            notify_property ("books");
+            notify_property ("tabs");
+        }
+        public void remove_book_at (int idx) {
+            _books.remove_at (idx);
+            notify_property ("books");
+            notify_property ("tabs");
+        }
+        public void clear_books () {
+            _books.clear ();
+            notify_property ("books");
+            notify_property ("tabs");
+        }
+        public void reorder_books (int from, int to) {
+            if (from < 0 || from >= _books.size || to < 0 || to > _books.size) return;
+            var tmp = _books[from];
+            _books.remove_at (from);
+            if (to > from) to--;
+            _books.insert (to, tmp);
+            notify_property ("books");
+            notify_property ("tabs");
+        }
 
     // BookContext lives inside AppModel scope for message carrying.
 
@@ -104,10 +181,9 @@ namespace Vchm.Model {
         // Proxied to active BookContext; with strict single-tab-per-file
         // global would work, but per-book is correct for clones.
         public bool history_navigation_in_progress {
-            get { return _active_ctx != null ? _active_ctx.history_navigation_in_progress : _scratch_history_in_progress; }
-            set { if (_active_ctx != null) _active_ctx.history_navigation_in_progress = value; else _scratch_history_in_progress = value; }
+            get { return current_ctx.history_navigation_in_progress; }
+            set { current_ctx.history_navigation_in_progress = value; }
         }
-        private bool _scratch_history_in_progress = false;
 
         // OPEN_FILE serialization (F26 follow-up): two concurrent open
         // workers raced on model.books / model.viewer / tabs[].url and
@@ -207,12 +283,7 @@ namespace Vchm.Model {
         }
 
         public AppModel () {
-            chm_file = _scratch_chm;
-            topics = _scratch_topics;
-            index = _scratch_index;
-            search = new SearchModel ();
-            history = _scratch_history;
-            viewer = _scratch_viewer;
+            // placeholder already has defaults; no separate scratch init needed
             settings = new SettingsModel ();
             bookmarks = new BookmarkStore ();
             bookmarks.load (settings.bookmark_rows);

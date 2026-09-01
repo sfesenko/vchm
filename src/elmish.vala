@@ -164,7 +164,18 @@ namespace Elmish {
         }
 
         private void process (Message msg) {
-            var cmd = updateModel (msg, model);
+            // B+hybrid: batch GObject notifies for sync UI (freeze/thaw) so
+            // 7-8 prop changes in one ModelMsg (e.g. OPEN_FILE_DONE) coalesce
+            // to one flush, not 7 storms. View still receives Event via notify
+            // (future TabModel) and via queue_view_update for now.
+            var obj = model as Object;
+            if (obj != null) obj.freeze_notify ();
+            Elmish.Cmd<Message>? cmd = null;
+            try {
+                cmd = updateModel (msg, model);
+            } finally {
+                if (obj != null) obj.thaw_notify ();
+            }
             queue_view_update (msg);
             Cmd.exec (dispatch, cmd);
         }

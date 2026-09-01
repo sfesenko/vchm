@@ -98,7 +98,16 @@ namespace Vchm.View {
             append (scrolled);
         }
 
+        // B+hybrid: called via AppModel.notify["active-book"] (freeze/thaw batched) instead of via TAB_ACTIVATED
+        public void notify_active_changed (AppModel model) {
+            built_root = null;
+            rebuild_tree (model);
+            var t_sel = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
+            select_url (t_sel.selected_url);
+        }
+
         public void update (AppMessage msg, AppModel model) {
+            var t_up = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
             switch (msg.kind) {
 
                 case AppMessageKind.CLOSE_FILE: {
@@ -108,13 +117,10 @@ namespace Vchm.View {
                 }
 
                 case AppMessageKind.TAB_ACTIVATED: {
-                    // The view swapped model.topics to the new active
-                    // tab's tree. Force a rebuild even if the root
-                    // instance happened to be reused (e.g. two tabs
-                    // for the same book via OPEN_IN_NEW_TAB).
+                    // Legacy path: still handled via Elmish for incremental migration
                     built_root = null;
                     rebuild_tree (model);
-                    select_url (model.topics.selected_url);
+                    select_url (t_up.selected_url);
                     break;
                 }
 
@@ -140,11 +146,11 @@ namespace Vchm.View {
                     // Coalescing guard + follow page changes: rebuild when
                     // the root instance changed (PANELS_REBUILT swaps it
                     // wholesale), then highlight current topic.
-                    if (model.topics.root != built_root) {
-                        built_root = model.topics.root;
+                    if (t_up.root != built_root) {
+                        built_root = t_up.root;
                         rebuild_tree (model);
                     }
-                    select_url (model.topics.selected_url);
+                    select_url (t_up.selected_url);
                     break;
                 }
 
@@ -156,8 +162,9 @@ namespace Vchm.View {
         private void rebuild_tree (AppModel model) {
             syncing = true;
             store.clear ();
-            if (model.topics.root != null) {
-                add_items_recursive (null, model.topics.root);
+            var t_rb = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
+            if (t_rb.root != null) {
+                add_items_recursive (null, t_rb.root);
             }
             tree_view.expand_all ();
             syncing = false;

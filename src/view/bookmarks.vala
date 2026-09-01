@@ -41,7 +41,8 @@ namespace Vchm.View {
             var btns = new Box (Orientation.HORIZONTAL, 6);
             var add_btn = new Button.with_label (_("Add"));
             add_btn.clicked.connect (() => {
-                if (model.viewer.current_url.length > 0 && model.file_open)
+                var v_add = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                if (v_add.current_url.length > 0 && model.file_open)
                     dispatch (new BookmarkAddMessage ());
             });
             btns.append (add_btn);
@@ -94,17 +95,26 @@ namespace Vchm.View {
         }
 
         private Gee.ArrayList<Bookmark>? current_list () {
-            if (!model.chm_file.is_open ()) return null;
-            return model.bookmarks.for_book (model.chm_file.filename ());
+            var c_cur = model.active_book != null ? model.active_book : model.placeholder;
+            if (!c_cur.chm_file.is_open ()) return null;
+            return model.bookmarks.for_book (c_cur.chm_file.filename ());
+        }
+
+        public void notify_active_changed (AppModel model) {
+            populated_for = "";
+            repopulate ();
+            var c_not = model.active_book != null ? model.active_book : model.placeholder;
+            populated_for = c_not.chm_file.is_open () ? c_not.chm_file.filename () : "";
         }
 
         public void update (AppMessage msg, AppModel model) {
+            var c_up = model.active_book != null ? model.active_book : model.placeholder;
             switch (msg.kind) {
                 case AppMessageKind.OPEN_FILE_DONE:
                 case AppMessageKind.BOOKMARKS_CHANGED:
                 case AppMessageKind.NAVIGATE_DONE: {
-                    var book = model.chm_file.is_open ()
-                        ? model.chm_file.filename () : "";
+                    var book = c_up.chm_file.is_open ()
+                        ? c_up.chm_file.filename () : "";
                     if (book != populated_for ||
                         msg.kind == AppMessageKind.BOOKMARKS_CHANGED) {
                         populated_for = book;
@@ -114,12 +124,11 @@ namespace Vchm.View {
                 }
 
                 case AppMessageKind.TAB_ACTIVATED: {
-                    // New active tab: refresh the bookmark list (it is
-                    // keyed by archive filename).
+                    // Legacy via Elmish; also via notify_active_changed
                     populated_for = "";   // bypass the guard
                     repopulate ();
-                    populated_for = model.chm_file.is_open ()
-                        ? model.chm_file.filename () : "";
+                    populated_for = c_up.chm_file.is_open ()
+                        ? c_up.chm_file.filename () : "";
                     break;
                 }
 

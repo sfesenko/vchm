@@ -39,9 +39,10 @@ namespace Vchm.View {
             settings.enable_developer_extras = false;
             settings.enable_write_console_messages_to_stdout = false;
             settings.enable_page_cache = true;
-            settings.default_font_size = model.viewer.font_size;
-            settings.default_font_family = model.viewer.font_family;
-            settings.monospace_font_family = model.viewer.fixed_font_family;
+            var v_init = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            settings.default_font_size = v_init.font_size;
+            settings.default_font_family = v_init.font_family;
+            settings.monospace_font_family = v_init.fixed_font_family;
             // Images are always on; remote subresources are blocked by the
             // CSP injected in on_chm_uri_request (see HtmlTextUtils).
             settings.auto_load_images = true;
@@ -293,7 +294,8 @@ namespace Vchm.View {
 
         public void save_scroll (AppModel model) {
             string archive = book_path;
-            if (archive == "" ) archive = model.chm_file.filename ();
+            if (archive == "" && model.active_book != null) archive = model.active_book.chm_file.filename ();
+            else if (archive == "" ) archive = model.placeholder.chm_file.filename ();
             if (archive == "" || !model.file_open) return;
             // Query scrollY asynchronously; on result persist to per-book store.
             evaluate_javascript.begin ("window.scrollY", -1, null, null, null, (obj, res) => {
@@ -323,8 +325,12 @@ namespace Vchm.View {
         // tab is re-shown after being hidden, because WebKit may have
         // unloaded the page contents while the tab was off-screen.
         public void sync_if_needed (AppModel model, bool force = false) {
-            var cur = model.viewer.current_url;
-            var book = book_path != "" ? book_path : model.chm_file.filename ();
+            var v_sync = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            var cur = v_sync.current_url;
+            string book;
+            if (book_path != "") book = book_path;
+            else if (model.active_book != null) book = model.active_book.chm_file.filename ();
+            else book = model.placeholder.chm_file.filename ();
             if (model.file_open && cur.length > 0 &&
                 (force || cur != loaded_url || book != loaded_book)) {
                 loaded_url = cur;
@@ -366,15 +372,17 @@ namespace Vchm.View {
                 case AppMessageKind.VIEWER_FONT_DECREASE:
                 case AppMessageKind.VIEWER_FONT_RESET: {
                     var settings = get_settings ();
-                    settings.default_font_size = model.viewer.font_size;
+                    var v_f = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                    settings.default_font_size = v_f.font_size;
                     break;
                 }
 
                 case AppMessageKind.VIEWER_FONT_CHANGED: {
                     var settings = get_settings ();
-                    settings.default_font_size = model.viewer.font_size;
-                    settings.default_font_family = model.viewer.font_family;
-                    settings.monospace_font_family = model.viewer.fixed_font_family;
+                    var v_fc = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                    settings.default_font_size = v_fc.font_size;
+                    settings.default_font_family = v_fc.font_family;
+                    settings.monospace_font_family = v_fc.fixed_font_family;
                     break;
                 }
 
