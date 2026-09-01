@@ -58,7 +58,7 @@ namespace Vchm.Model {
                     selected_index = 0;
                 }
             } else {
-                error = "No index in this archive";
+                error = _("No index in this archive");
             }
 
             loading = false;

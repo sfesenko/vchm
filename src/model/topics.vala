@@ -77,7 +77,7 @@ namespace Vchm.Model {
                 root = build_flat_pages (chm_file);
             }
             if (root == null) {
-                error = "Failed to read topics data from CHM";
+                error = _("Failed to read topics data from CHM");
             }
 
             loading = false;

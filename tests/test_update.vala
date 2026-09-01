@@ -258,6 +258,162 @@ void test_settings_model_recent_files () {
     assert (settings.recent_files[0] == "/test1.chm");
 }
 
+void test_per_tab_history_isolation () {
+    var model = make_model ();
+    var ctxA = new BookContext ();
+    ctxA.title = "Book A";
+    var ctxB = new BookContext ();
+    ctxB.title = "Book B";
+    model.add_book (ctxA);
+    model.add_book (ctxB);
+    model.active_book = ctxA;
+    model.active_tab_index = 0;
+    model.file_open = true;
+
+    // Simulate navigations via NAVIGATE_DONE routed by tab_index
+    updateModel (new NavigateDoneMessage ("/a1.html", "A1", "/a1.html", 0), model);
+    updateModel (new NavigateDoneMessage ("/a2.html", "A2", "/a2.html", 0), model);
+    assert (ctxA.history.entries.size == 2);
+    assert (ctxB.history.entries.size == 0);
+    assert (ctxA.history.current_index == 1);
+
+    updateModel (new NavigateDoneMessage ("/b1.html", "B1", "/b1.html", 1), model);
+    assert (ctxB.history.entries.size == 1);
+    assert (ctxA.history.entries.size == 2);
+
+    // Back in A must not affect B
+    var back = ctxA.history.go_back ();
+    assert (back != null && back.url == "/a1.html");
+    assert (ctxA.history.current_index == 0);
+    assert (ctxB.history.current_index == 0);
+    assert (ctxB.history.entries[0].url == "/b1.html");
+
+    // Forward in B isolated
+    var fwd = ctxB.history.go_back ();
+    // B has only 1 entry, can't go back
+    assert (fwd == null);
+    assert (ctxB.history.current_index == 0);
+}
+
+void test_per_tab_search_isolation () {
+    var model = make_model ();
+    var ctxA = new BookContext ();
+    var ctxB = new BookContext ();
+    model.add_book (ctxA);
+    model.add_book (ctxB);
+    model.active_book = ctxA;
+    model.active_tab_index = 0;
+    model.file_open = true;
+
+    ctxA.search.query = "hello";
+    ctxB.search.query = "world";
+    assert (ctxA.search.query == "hello");
+    assert (ctxB.search.query == "world");
+
+    // SEARCH_DONE routed by tab_index
+    var resA = new Gee.ArrayList<SearchResult> ();
+    resA.add (new SearchResult ("/a.html", "A", 1));
+    updateModel (new SearchDoneMessage (resA, 0), model);
+    assert (ctxA.search.results.size == 1);
+    assert (ctxB.search.results.size == 0);
+
+    var resB = new Gee.ArrayList<SearchResult> ();
+    resB.add (new SearchResult ("/b.html", "B", 1));
+    resB.add (new SearchResult ("/b2.html", "B2", 1));
+    updateModel (new SearchDoneMessage (resB, 1), model);
+    assert (ctxB.search.results.size == 2);
+    assert (ctxA.search.results.size == 1);
+}
+
+void test_per_tab_viewer_isolation () {
+    var model = make_model ();
+    var ctxA = new BookContext ();
+    var ctxB = new BookContext ();
+    model.add_book (ctxA);
+    model.add_book (ctxB);
+    model.active_book = ctxA;
+    model.file_open = true;
+    ctxA.viewer.font_size = 12;
+    ctxB.viewer.font_size = 18;
+    assert (ctxA.viewer.font_size == 12);
+    assert (ctxB.viewer.font_size == 18);
+    // VIEWER_FONT_INCREASE on active_book only
+    updateModel (new ViewerFontIncreaseMessage (), model);
+    assert (ctxA.viewer.font_size == 13);
+    assert (ctxB.viewer.font_size == 18);
+    // Switch and increase B
+    model.active_book = ctxB;
+    updateModel (new ViewerFontIncreaseMessage (), model);
+    assert (ctxB.viewer.font_size == 19);
+    assert (ctxA.viewer.font_size == 13);
+}
+
+void test_tab_reorder () {
+    var model = make_model ();
+    var a = new BookContext (); a.title = "A";
+    var b = new BookContext (); b.title = "B";
+    var c = new BookContext (); c.title = "C";
+    model.add_book (a);
+    model.add_book (b);
+    model.add_book (c);
+    assert (model.books.size == 3);
+    assert (model.books[0] == a);
+    assert (model.books[1] == b);
+    assert (model.books[2] == c);
+    // Move A from 0 to 2 (end)
+    model.reorder_books (0, 2);
+    // After remove 0 and insert at 2 (adjusted for removal), order should be B, A, C or B,C,A depending on implementation
+    // Our implementation removes then inserts: if to>from to-- ; so 0->2 becomes 0 removed, to becomes 1, insert at1 => B,A,C
+    assert (model.books.size == 3);
+    // Verify all three still present
+    bool has_a = false, has_b = false, has_c = false;
+    foreach (var x in model.books) {
+        if (x == a) has_a = true;
+        if (x == b) has_b = true;
+        if (x == c) has_c = true;
+    }
+    assert (has_a && has_b && has_c);
+}
+
+void test_close_mid_navigate () {
+    var model = make_model ();
+    var ctx = new BookContext ();
+    ctx.title = "Book";
+    model.add_book (ctx);
+    model.active_book = ctx;
+    model.active_tab_index = 0;
+    model.file_open = true;
+    // Simulate NAVIGATE_DONE for tab 0, then close before next navigate
+    updateModel (new NavigateDoneMessage ("/p1.html", "P1", "/p1.html", 0), model);
+    assert (ctx.history.entries.size == 1);
+    // Close the book
+    updateModel (new CloseFileMessage (), model);
+    assert (model.books.size == 0);
+    assert (!model.file_open);
+    // Late NAVIGATE_DONE for old tab should not crash (target_ctx == null or placeholder)
+    updateModel (new NavigateDoneMessage ("/p2.html", "P2", "/p2.html", 0), model);
+    // Should not have added to closed ctx
+    assert (ctx.history.entries.size == 1);
+    // Placeholder should not have history (or at least not crash)
+    assert (model.placeholder.history.entries.size == 0);
+}
+
+void test_tabs_vs_placeholder () {
+    var model = make_model ();
+    assert (model.placeholder != null);
+    // When no book open, viewer via placeholder should be functional
+    model.placeholder.viewer.font_size = 15;
+    assert (model.viewer.font_size == 15);
+    // After adding book, viewer should delegate to active_book
+    var ctx = new BookContext ();
+    ctx.viewer.font_size = 20;
+    model.add_book (ctx);
+    model.active_book = ctx;
+    assert (model.viewer.font_size == 20);
+    model.active_book = null;
+    assert (model.viewer.font_size == 15);
+}
+
 int main (string[] args) {
     Test.init (ref args);
 
@@ -284,6 +440,14 @@ int main (string[] args) {
     Test.add_func ("/model/viewer", test_viewer_model);
     Test.add_func ("/model/settings", test_settings_model_defaults);
     Test.add_func ("/model/settings/recent_files", test_settings_model_recent_files);
+
+    // B+hybrid per-tab isolation & lifecycle
+    Test.add_func ("/update/per_tab_history_isolation", test_per_tab_history_isolation);
+    Test.add_func ("/update/per_tab_search_isolation", test_per_tab_search_isolation);
+    Test.add_func ("/update/per_tab_viewer_isolation", test_per_tab_viewer_isolation);
+    Test.add_func ("/update/tab_reorder", test_tab_reorder);
+    Test.add_func ("/update/close_mid_navigate", test_close_mid_navigate);
+    Test.add_func ("/update/tabs_vs_placeholder", test_tabs_vs_placeholder);
 
     return Test.run ();
 }

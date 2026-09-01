@@ -1,0 +1,397 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the vchm package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: vchm\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-09-02 01:56+0300\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#. "" = placeholder, no book yet
+#: src/app-view.vala:21 src/app-view.vala:1032 src/app-view.vala:1182
+msgid "New page"
+msgstr ""
+
+#: src/app-view.vala:351
+msgid "Recent files"
+msgstr ""
+
+#: src/app-view.vala:359
+msgid "Menu"
+msgstr ""
+
+#: src/app-view.vala:374 src/app-view.vala:389
+msgid "No recent files"
+msgstr ""
+
+#. File section
+#: src/app-view.vala:411
+msgid "Open..."
+msgstr ""
+
+#: src/app-view.vala:415
+msgid "Recent Files"
+msgstr ""
+
+#: src/app-view.vala:416
+msgid "Print..."
+msgstr ""
+
+#: src/app-view.vala:417 src/app-view.vala:650 src/app-view.vala:733
+#: src/view/toolbar.vala:53
+msgid "Close"
+msgstr ""
+
+#: src/app-view.vala:418
+msgid "Quit"
+msgstr ""
+
+#: src/app-view.vala:419
+msgid "File"
+msgstr ""
+
+#. View section
+#. Setup header bar after toolbar is created
+#. Sidebar notebook with tabs
+#. Flat TOC from enumerated content pages. Labels: the page
+#. <title>, then the first <h1>/<h2> heading, then the file
+#. name — HHW books often title every page with the book name,
+#. and raw file names read as broken content in the sidebar.
+#: src/app-view.vala:423 src/app-view.vala:554 src/model/topics.vala:68
+#: src/model/topics.vala:92 src/model/topics.vala:207 src/view/toolbar.vala:71
+msgid "Contents"
+msgstr ""
+
+#: src/app-view.vala:424 src/app-view.vala:555 src/view/index.vala:59
+#: src/view/toolbar.vala:78
+msgid "Index"
+msgstr ""
+
+#: src/app-view.vala:425 src/app-view.vala:556 src/view/search.vala:54
+#: src/view/toolbar.vala:85
+msgid "Search"
+msgstr ""
+
+#: src/app-view.vala:426 src/app-view.vala:557
+msgid "Bookmarks"
+msgstr ""
+
+#: src/app-view.vala:427 src/view/toolbar.vala:103
+msgid "Increase Font Size"
+msgstr ""
+
+#. Font controls. zoom-in/out exist in every theme; the
+#. previous text-size-*-symbolic names are in no icon set and
+#. rendered as blank boxes.
+#: src/app-view.vala:428 src/view/toolbar.vala:97
+msgid "Decrease Font Size"
+msgstr ""
+
+#: src/app-view.vala:429 src/view/toolbar.vala:109
+msgid "Reset Font Size"
+msgstr ""
+
+#: src/app-view.vala:430
+msgid "Find in Page..."
+msgstr ""
+
+#: src/app-view.vala:431
+msgid "Fullscreen"
+msgstr ""
+
+#: src/app-view.vala:434 src/app-update.vala:888
+msgid "Automatic"
+msgstr ""
+
+#: src/app-view.vala:440
+msgid "Encoding"
+msgstr ""
+
+#. Bookmarks actions live in the File menu.
+#: src/app-view.vala:443
+msgid "Add Bookmark"
+msgstr ""
+
+#: src/app-view.vala:444
+msgid "View"
+msgstr ""
+
+#. Help section
+#: src/app-view.vala:448
+msgid "About"
+msgstr ""
+
+#: src/app-view.vala:449
+msgid "Help"
+msgstr ""
+
+#: src/app-view.vala:627
+msgid "Find:"
+msgstr ""
+
+#: src/app-view.vala:630
+msgid "Search in page..."
+msgstr ""
+
+#: src/app-view.vala:634
+msgid "Match case"
+msgstr ""
+
+#: src/app-view.vala:635
+msgid "Case sensitive search"
+msgstr ""
+
+#: src/app-view.vala:642
+msgid "Previous"
+msgstr ""
+
+#: src/app-view.vala:646
+msgid "Next"
+msgstr ""
+
+#: src/app-view.vala:712
+msgid "About vCHM"
+msgstr ""
+
+#: src/app-view.vala:713
+msgid "A CHM file viewer"
+msgstr ""
+
+#: src/app-view.vala:715
+msgid "Project website"
+msgstr ""
+
+#: src/app-view.vala:732
+msgid "Preferences"
+msgstr ""
+
+#: src/app-view.vala:743
+msgid ""
+"Images are always loaded from the opened book. Remote content is blocked."
+msgstr ""
+
+#: src/app-view.vala:751
+msgid "Proportional font:"
+msgstr ""
+
+#: src/app-view.vala:754
+msgid "Choose proportional font"
+msgstr ""
+
+#. Fixed font picker
+#: src/app-view.vala:773
+msgid "Fixed font:"
+msgstr ""
+
+#: src/app-view.vala:776
+msgid "Choose fixed-width font"
+msgstr ""
+
+#. TTL for per-book state (position/history/expanded)
+#: src/app-view.vala:795
+msgid "Per-book history expiry (days, 0=keep):"
+msgstr ""
+
+#: src/app-view.vala:798
+msgid ""
+"Days after last access to keep per-book position, expanded sections and "
+"navigation history"
+msgstr ""
+
+#: src/app-view.vala:806
+msgid "Bookmarks expiry (days, 0=keep):"
+msgstr ""
+
+#: src/app-view.vala:809
+msgid "Days after creation to keep bookmarks"
+msgstr ""
+
+#: src/app-view.vala:835
+msgid "Close tab"
+msgstr ""
+
+#: src/app-view.vala:1099
+msgid "Open CHM File"
+msgstr ""
+
+#: src/app-view.vala:1102
+msgid "CHM Files"
+msgstr ""
+
+#: src/app-view.vala:1321
+#, c-format
+msgid "%u matches"
+msgstr ""
+
+#: src/app-view.vala:1322
+msgid "no matches"
+msgstr ""
+
+#: src/app-update.vala:82
+msgid "Failed to open CHM file"
+msgstr ""
+
+#. let worker extract <title>/<h1> for that page
+#. Panels were built on the open worker; here we just wire state.
+#. Dispatch NAVIGATE to actually load the content
+#. DO NOT add to history here - NAVIGATE_DONE will handle it
+#. Add to recent files
+#. Update last opened directory
+#: src/app-update.vala:181
+#, c-format
+msgid "Opened: %s"
+msgstr ""
+
+#: src/app-update.vala:187
+#, c-format
+msgid "Failed to open '%s': %s"
+msgstr ""
+
+#: src/app-update.vala:211 src/model/appmodel.vala:301
+msgid "Ready"
+msgstr ""
+
+#. Dead link: every fallback missed — report failure instead
+#. of DONE (which loaded a blank page and polluted history).
+#: src/app-update.vala:297
+msgid "Page not found"
+msgstr ""
+
+#: src/app-update.vala:389
+#, c-format
+msgid "Navigation failed: %s"
+msgstr ""
+
+#: src/app-update.vala:802
+msgid "Bookmark added"
+msgstr ""
+
+#: src/app-update.vala:887
+#, c-format
+msgid "Encoding: %s"
+msgstr ""
+
+#: src/model/topics.vala:80
+msgid "Failed to read topics data from CHM"
+msgstr ""
+
+#: src/model/index.vala:61
+msgid "No index in this archive"
+msgstr ""
+
+#: src/view/topics.vala:44
+msgid "Topics"
+msgstr ""
+
+#. Filter entry
+#: src/view/index.vala:30
+msgid "Filter index..."
+msgstr ""
+
+#: src/view/index.vala:197
+msgid "Index is empty"
+msgstr ""
+
+#: src/view/search.vala:44
+msgid "Search for..."
+msgstr ""
+
+#: src/view/search.vala:63
+msgid "Whole words"
+msgstr ""
+
+#: src/view/search.vala:69
+msgid "Titles only"
+msgstr ""
+
+#: src/view/search.vala:96
+msgid "Title"
+msgstr ""
+
+#: src/view/search.vala:105
+msgid "Rank"
+msgstr ""
+
+#: src/view/search.vala:240
+#, c-format
+msgid "No results for '%s'"
+msgstr ""
+
+#: src/view/viewer.vala:102
+msgid "Open Link in Browser"
+msgstr ""
+
+#: src/view/viewer.vala:235
+#, c-format
+msgid "Cannot open %s: %s"
+msgstr ""
+
+#. Navigation buttons
+#: src/view/toolbar.vala:25
+msgid "Back"
+msgstr ""
+
+#: src/view/toolbar.vala:31
+msgid "Forward"
+msgstr ""
+
+#: src/view/toolbar.vala:37
+msgid "Home"
+msgstr ""
+
+#. File buttons
+#: src/view/toolbar.vala:47
+msgid "Open"
+msgstr ""
+
+#: src/view/toolbar.vala:59
+msgid "Copy selection"
+msgstr ""
+
+#. Find
+#: src/view/toolbar.vala:119
+msgid "Find in Page"
+msgstr ""
+
+#. Print
+#: src/view/toolbar.vala:130
+msgid "Print"
+msgstr ""
+
+#: src/view/bookmarks.vala:42
+msgid "Add"
+msgstr ""
+
+#: src/view/bookmarks.vala:50
+msgid "Remove"
+msgstr ""
+
+#: src/view/bookmarks.vala:59
+msgid "Rename"
+msgstr ""
+
+#: src/view/bookmarks.vala:65
+msgid "Rename Bookmark"
+msgstr ""
+
+#: src/view/bookmarks.vala:66
+msgid "_Cancel"
+msgstr ""
+
+#: src/view/bookmarks.vala:66
+msgid "_Rename"
+msgstr ""
+
+#: src/view/bookmarks.vala:72
+msgid "New title:"
+msgstr ""

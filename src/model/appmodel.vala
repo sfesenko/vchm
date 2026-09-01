@@ -298,7 +298,7 @@ namespace Vchm.Model {
             viewer.fixed_font_family = settings.fixed_font_family;
 
             file_open = false;
-            status_text = "Ready";
+            status_text = _("Ready");
         }
 
         // Flush the scratch sub-models into a BookContext (called by

@@ -79,7 +79,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                                 open_parent (new OpenFileDoneMessage (
                                     path, ctx.title, ctx.home, ctx));
                             } else {
-                                open_parent (new OpenFileFailedMessage (path, "Failed to open CHM file"));
+                                open_parent (new OpenFileFailedMessage (path, _("Failed to open CHM file")));
                             }
                         } finally {
                             // FIFO drain: release and if queued, dispatch next.
@@ -178,13 +178,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // Update last opened directory
             model.settings.last_opened_dir = GLib.Path.get_dirname (done_msg.path);
             
-            model.status_text = "Opened: %s".printf (GLib.Path.get_basename (done_msg.path));
+            model.status_text = _("Opened: %s").printf (GLib.Path.get_basename (done_msg.path));
             break;
         }
 
         case AppMessageKind.OPEN_FILE_FAILED: {
             var fail_msg = (OpenFileFailedMessage) msg;
-            model.show_toast ("Failed to open '%s': %s".printf (GLib.Path.get_basename (fail_msg.path), fail_msg.error));
+            model.show_toast (_("Failed to open '%s': %s").printf (GLib.Path.get_basename (fail_msg.path), fail_msg.error));
             break;
         }
 
@@ -208,7 +208,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             model.placeholder.history.clear ();
             model.placeholder.history_navigation_in_progress = false;
             model.file_open = false;
-            model.status_text = "Ready";
+            model.status_text = _("Ready");
             break;
         }
 
@@ -294,7 +294,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 // Dead link: every fallback missed — report failure instead
                 // of DONE (which loaded a blank page and polluted history).
                 if (!snap_file.has_object (target)) {
-                    nav_parent (new NavigateFailedMessage (snap_url, "Page not found"));
+                    nav_parent (new NavigateFailedMessage (snap_url, _("Page not found")));
                     return null;
                 }
 
@@ -386,7 +386,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // its history push.
             var h_fail = model.active_book != null ? model.active_book : model.placeholder;
             h_fail.history_navigation_in_progress = false;
-            model.show_toast ("Navigation failed: %s".printf (fail_msg.error));
+            model.show_toast (_("Navigation failed: %s").printf (fail_msg.error));
             break;
         }
 

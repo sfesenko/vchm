@@ -17,3 +17,4 @@ src/view/viewer.vala
 src/view/toolbar.vala
 src/view/statusbar.vala
 src/view/contextmenu.vala
+src/view/bookmarks.vala

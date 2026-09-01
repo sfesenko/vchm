@@ -220,6 +220,71 @@ void test_plain_class_messages_work_with_generic_core () {
     assert (model.count == 5);
 }
 
+void test_dispatch_inside_updateView_is_not_lost () {
+    var model = new CounterModel ();
+    ElmishProgram<CounterModel, CounterModel, MockView>? prog = null;
+    // Create program where updateView re-dispatches once
+    prog = new ElmishProgram<CounterModel, CounterModel, MockView> (
+        model,
+        (dispatch, m) => new MockView (),
+        (msg, m) => {
+            m.count += 1;
+            m.last_msg = "updated %d".printf (m.count);
+            return null;
+        },
+        (msg, m, view) => {
+            view.update_calls += 1;
+            view.last_msg = "viewed %d".printf (view.update_calls);
+            // Re-entrant dispatch on first view update
+            if (m.count == 1 && view.update_calls == 1) {
+                // Use program's dispatch (marshalled if needed, but we are on main loop)
+                prog.dispatch_message (new CounterModel ());
+            }
+        }
+    );
+    prog.start ();
+    prog.dispatch_message (new CounterModel ());
+    // Model should have first count immediately
+    assert (model.count == 1);
+    // View hasn't run yet (Idle)
+    MockView view = prog.get_view () as MockView;
+    assert (view.update_calls == 0);
+    // Pump until first view runs (which will dispatch second)
+    while (view.update_calls == 0) {
+        assert (GLib.MainContext.default ().iteration (true));
+    }
+    // After first view, second dispatch should have updated model to 2
+    // Pump until second model update is visible
+    while (model.count < 2) {
+        assert (GLib.MainContext.default ().iteration (true));
+    }
+    assert (model.count == 2);
+    // Pump until second view runs
+    while (view.update_calls < 2) {
+        assert (GLib.MainContext.default ().iteration (true));
+    }
+    assert (view.update_calls == 2);
+    assert (view.last_msg == "viewed 2");
+}
+
+void test_dispose_cancels_pending_view_update () {
+    var model = new CounterModel ();
+    var program = build_program (model);
+    program.start ();
+    program.dispatch_message (new CounterModel ());
+    // View queued but not yet run
+    MockView view = program.get_view () as MockView;
+    assert (view.update_calls == 0);
+    program.dispose ();
+    // Pump loop — disposed program must not call updateView
+    // Run a few iterations
+    for (int i = 0; i < 5; i++) {
+        GLib.MainContext.default ().iteration (false);
+    }
+    assert (view.update_calls == 0);
+    assert (model.count == 1);
+}
+
 int main (string[] args) {
     Test.init (ref args);
 
@@ -235,6 +300,8 @@ int main (string[] args) {
     Test.add_func ("/elmish/cmd_map_lifts_into_another_space", test_cmd_map_lifts_into_another_space);
     Test.add_func ("/elmish/cmd_map_preserves_chain_order", test_cmd_map_preserves_chain_order);
     Test.add_func ("/elmish/plain_class_messages_in_generic_core", test_plain_class_messages_work_with_generic_core);
+    Test.add_func ("/elmish/dispatch_inside_updateView_is_not_lost", test_dispatch_inside_updateView_is_not_lost);
+    Test.add_func ("/elmish/dispose_cancels_pending_view_update", test_dispose_cancels_pending_view_update);
 
     return Test.run ();
 }
