@@ -83,6 +83,12 @@ namespace Vchm.View {
                 dispatch (new ViewerFindCountMessage (0));
             });
 
+            // Hover link → status bar
+            mouse_target_changed.connect ((hit, modifiers) => {
+                var hover = hit.link_uri; // nullable
+                dispatch (new LinkHoveredMessage (hover));
+            });
+
             context_menu = new WebViewContextMenu (this, dispatch);
             context_menu.build_ui ();
 

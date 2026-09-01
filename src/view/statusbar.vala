@@ -73,6 +73,16 @@ namespace Vchm.View {
                     status_label.label = model.status_text;
                     break;
                 }
+                case AppMessageKind.LINK_HOVERED: {
+                    var hm = (LinkHoveredMessage) msg;
+                    if (hm.url != null && hm.url.length > 0) {
+                        status_label.label = hm.url;
+                    } else {
+                        // Restore last status (page title or Ready)
+                        status_label.label = model.status_text;
+                    }
+                    break;
+                }
                 default:
                     break;
             }

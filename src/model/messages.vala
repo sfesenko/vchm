@@ -77,6 +77,11 @@ namespace Vchm.Model {
 
         // Tab lifecycle
         TAB_ACTIVATED,
+        NEXT_TAB,
+        PREV_TAB,
+
+        // Link hover
+        LINK_HOVERED,
 
         // Window
         WINDOW_STATE_CHANGED,
@@ -426,6 +431,20 @@ namespace Vchm.Model {
             this.tab_index = tab_index;
             this.book_path = book_path;
         }
+    }
+
+    public class NextTabMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.NEXT_TAB; } }
+    }
+
+    public class PrevTabMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.PREV_TAB; } }
+    }
+
+    public class LinkHoveredMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.LINK_HOVERED; } }
+        public string? url { get; private set; }
+        public LinkHoveredMessage (string? url) { this.url = url; }
     }
 
     public class SetEncodingMessage : AppMessage {

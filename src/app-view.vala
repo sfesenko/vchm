@@ -40,9 +40,12 @@ namespace Vchm {
         public const string ACTION_FONT_INCREASE = "font_increase";
         public const string ACTION_FONT_DECREASE = "font_decrease";
         public const string ACTION_FONT_RESET = "font_reset";
+        public const string ACTION_COPY = "copy";
         public const string ACTION_FIND = "find";
     public const string ACTION_PRINT = "print";
     public const string ACTION_FULLSCREEN = "fullscreen";
+    public const string ACTION_NEXT_TAB = "next-tab";
+    public const string ACTION_PREV_TAB = "prev-tab";
     public const string ACTION_ADD_BOOKMARK = "add-bookmark";
     public const string ACTION_SET_ENCODING = "set-encoding";
         public const string ACTION_TOGGLE_TOPICS = "toggle_topics";
@@ -194,8 +197,11 @@ namespace Vchm {
                 { ACTION_FONT_INCREASE, () => dispatch (new ViewerFontIncreaseMessage ()), null, null },
                 { ACTION_FONT_DECREASE, () => dispatch (new ViewerFontDecreaseMessage ()), null, null },
                 { ACTION_FONT_RESET, () => dispatch (new ViewerFontResetMessage ()), null, null },
+                { ACTION_COPY, () => dispatch (new ViewerCopyMessage ()), null, null },
                 { ACTION_FIND, () => toggle_find_bar (), null, null },
                 { ACTION_FULLSCREEN, () => toggle_fullscreen (), null, null },
+                { ACTION_NEXT_TAB, () => switch_tab (1), null, null },
+                { ACTION_PREV_TAB, () => switch_tab (-1), null, null },
                 { ACTION_ADD_BOOKMARK, () => dispatch (new BookmarkAddMessage ()), null, null },
                 { ACTION_PRINT, () => viewer_view.print_page (), null, null },
                 // (panel toggles registered as stateful actions below)
@@ -286,12 +292,16 @@ namespace Vchm {
             application.set_accels_for_action (ACTION_PREFIX + ACTION_BACK, {"<Alt>Left"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FORWARD, {"<Alt>Right"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_HOME, {"<Alt>Home"});
+            application.set_accels_for_action (ACTION_PREFIX + ACTION_COPY, {"<Control>c"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FONT_INCREASE, {"<Control>plus", "<Control>equal"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FONT_DECREASE, {"<Control>minus"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FONT_RESET, {"<Control>0"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FIND, {"<Control>f"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_PRINT, {"<Control>p"});
             application.set_accels_for_action (ACTION_PREFIX + ACTION_FULLSCREEN, {"F11", "F11"});
+            application.set_accels_for_action (ACTION_PREFIX + ACTION_NEXT_TAB, {"<Control>Page_Down"});
+            application.set_accels_for_action (ACTION_PREFIX + ACTION_PREV_TAB, {"<Control>Page_Up"});
+            application.set_accels_for_action (ACTION_PREFIX + ACTION_ABOUT, {"F1"});
             application.set_accels_for_action (ACTION_PREFIX + "set-encoding", {});
         }
 
@@ -405,7 +415,7 @@ namespace Vchm {
         
         private GLib.Menu create_app_menu () {
             var menu = new GLib.Menu ();
-            
+
             // File section
             var file_section = new GLib.Menu ();
             file_section.append (_("Open..."), "win.open");
@@ -417,7 +427,13 @@ namespace Vchm {
             file_section.append (_("Close"), "win.close");
             file_section.append (_("Quit"), "win.quit");
             menu.append_section (_("File"), file_section);
-            
+
+            // Edit section (Copy, Find)
+            var edit_section = new GLib.Menu ();
+            edit_section.append (_("Copy"), "win.copy");
+            edit_section.append (_("Find in Page..."), "win.find");
+            menu.append_section (_("Edit"), edit_section);
+
             // View section
             var view_section = new GLib.Menu ();
             view_section.append (_("Contents"), "win.toggle_topics");
@@ -442,13 +458,31 @@ namespace Vchm {
             // Bookmarks actions live in the File menu.
             file_section.append (_("Add Bookmark"), "win.add-bookmark");
             menu.append_section (_("View"), view_section);
-            
+
+            // History section (Back/Forward/Home)
+            var history_section = new GLib.Menu ();
+            history_section.append (_("Back"), "win.back");
+            history_section.append (_("Forward"), "win.forward");
+            history_section.append (_("Home"), "win.home");
+            menu.append_section (_("History"), history_section);
+
             // Help section
             var help_section = new GLib.Menu ();
             help_section.append (_("About"), "win.about");
             menu.append_section (_("Help"), help_section);
-            
+
             return menu;
+        }
+
+        private void switch_tab (int delta) {
+            if (tabs.size <= 1) return;
+            int next = active_tab + delta;
+            if (next < 0) next = tabs.size - 1;
+            if (next >= tabs.size) next = 0;
+            // Dispatch through Elmish so model.active_tab_index stays consistent
+            if (delta > 0) dispatch (new NextTabMessage ());
+            else dispatch (new PrevTabMessage ());
+            viewer_notebook.page = next;
         }
 
 private void setup_main_layout (AppModel model) {

@@ -984,6 +984,18 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // persist the active tab index if needed).
             break;
         }
+
+        case AppMessageKind.NEXT_TAB:
+        case AppMessageKind.PREV_TAB:
+            // View handles the actual Notebook page switch; model only
+            // tracks active_tab_index for NAVIGATE routing. View will
+            // dispatch TAB_ACTIVATED after switching.
+            break;
+
+        case AppMessageKind.LINK_HOVERED: {
+            // Status bar is view-owned; model keeps no hover state.
+            break;
+        }
     }
 
     return cmd;
