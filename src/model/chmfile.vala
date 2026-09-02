@@ -227,7 +227,11 @@ namespace Vchm.Model {
         // this table, so every tab serves from its own archive. Keyed by
         // FULL PATH: two books may share a basename (/en/help.chm vs
         // /uk/help.chm) and must not collide (review F5).
+        // Static HashMap is accessed from both the main thread (scheme
+        // handler) and worker threads (OPEN_FILE load), so it needs a
+        // dedicated mutex (per-instance _api_mutex is not enough).
         private static Gee.HashMap<string, weak CHMFile>? s_registry = null;
+        private static GLib.Mutex s_registry_mutex = GLib.Mutex ();
 
         private static void reg () {
             if (s_registry == null)
@@ -235,24 +239,39 @@ namespace Vchm.Model {
         }
 
         private void register_self () {
-            reg ();
-            s_registry[_filename] = this;
+            s_registry_mutex.lock ();
+            try {
+                reg ();
+                s_registry[_filename] = this;
+            } finally {
+                s_registry_mutex.unlock ();
+            }
         }
 
         private void unregister_self () {
-            if (s_registry == null) return;
-            s_registry.unset (_filename);
+            s_registry_mutex.lock ();
+            try {
+                if (s_registry == null) return;
+                s_registry.unset (_filename);
+            } finally {
+                s_registry_mutex.unlock ();
+            }
         }
 
         public static CHMFile? by_path (string path) {
-            if (s_registry == null) return null;
-            if (!s_registry.has_key (path)) return null;
-            var v = s_registry[path];
-            if (v == null) {
-                s_registry.unset (path);
-                return null;
+            s_registry_mutex.lock ();
+            try {
+                if (s_registry == null) return null;
+                if (!s_registry.has_key (path)) return null;
+                var v = s_registry[path];
+                if (v == null) {
+                    s_registry.unset (path);
+                    return null;
+                }
+                return v;
+            } finally {
+                s_registry_mutex.unlock ();
             }
-            return v;
         }
 
         // Re-key after a duplicate open displaced our registry entry

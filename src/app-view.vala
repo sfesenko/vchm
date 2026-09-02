@@ -893,6 +893,14 @@ private void setup_main_layout (AppModel model) {
         // Bind a placeholder tab to a freshly opened book.
         private void attach_book_to_tab (DocumentTab tab, BookContext ctx,
                                           string path, bool sync_now) {
+            // The WebView keeps DOM, history and a cached (url,book)
+            // pair. Reusing it for a different archive without clearing
+            // that state leaves stale data and, when the new URL has
+            // the same string as the old one (re-opening the same file
+            // after close), the guard `cur != loaded_url` in
+            // sync_if_needed skips the load and the view stays blank
+            // (user report Fort book open-close-open). Reset first.
+            tab.view.invalidate_for_new_book ();
             // Full path: the serving registry and chm:// URIs are keyed by
             // it, and two books may share a basename (review F5).
             // H1: set active_book FIRST so proxied setters route to the
@@ -1192,7 +1200,7 @@ private void setup_main_layout (AppModel model) {
                     viewer_notebook.show_tabs = tabs.size > 1;
                     viewer_notebook.page = tabs.index_of (target);
                     if (!created)
-                        target.view.sync_if_needed (model);
+                        target.view.sync_if_needed (model, true);
                     refresh_recent_menus ();
                     break;
                 }
@@ -1212,6 +1220,8 @@ private void setup_main_layout (AppModel model) {
                     // Model pointers stay; the explicit Close already
                     // closed the chm file.
                     first.book_path = "";
+                    first.view.book_path = "";
+                    first.view.reset_to_blank ();
                     first.url = "/";
                     first.title = _("New page");
                     first.title_label.set_text (first.title);

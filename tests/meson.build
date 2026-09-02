@@ -85,6 +85,18 @@ test('test parsers', test_parsers,
   depends: mkfixtures,
 )
 
+test_reopen = executable('test_reopen',
+  'test_reopen.vala',
+  dependencies: [test_deps, lib_core_dep],
+  link_with: chmlib_lib,
+)
+test('test reopen', test_reopen,
+  env: test_env + ['FIXTURES_DIR=' + fixtures_dir],
+  depends: mkfixtures,
+)
+
+# Reopen integration test is defined in the root meson.build (needs app_sources).
+
 # test_update requires GTK-dependent models, so it's built with the main executable
 # and tested separately
 

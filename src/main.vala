@@ -79,5 +79,29 @@ int main (string[] args) {
         });
     });
 
+    // Integration test hook for open-close-reopen (Fort blank).
+    // Enabled via VCHM_TEST_REOPEN_CYCLE=1 and VCHM_TEST_REOPEN_BOOK=<path>.
+    // Used by tools/test_reopen.sh to verify the viewer is reset correctly.
+    // The hook simply closes and reopens the same book after the initial
+    // open has finished; the per-book last_url is preserved across the
+    // cycle, so the viewer must reload the same URL after reopen (the
+    // bug was that the cached (loaded_url, loaded_book) prevented the
+    // reload and left the view blank).
+    var reopen_cycle = GLib.Environment.get_variable ("VCHM_TEST_REOPEN_CYCLE");
+    var reopen_book = GLib.Environment.get_variable ("VCHM_TEST_REOPEN_BOOK");
+    if (reopen_cycle != null && reopen_cycle == "1" && reopen_book != null && reopen_book != "") {
+        string rb = reopen_book;
+        program.add_subscription ((dispatch) => {
+            GLib.Timeout.add (3000, () => {
+                dispatch (new CloseFileMessage ());
+                return false;
+            });
+            GLib.Timeout.add (5000, () => {
+                dispatch (new OpenFileMessage (rb));
+                return false;
+            });
+        });
+    }
+
     return app.run (args);
 }

@@ -77,6 +77,7 @@ namespace Vchm.View {
             });
 
             tree_view.row_expanded.connect ((iter, path) => {
+                if (syncing) return;
                 Value val;
                 store.get_value (iter, 1, out val);
                 string? url = val.get_string ();
@@ -86,6 +87,7 @@ namespace Vchm.View {
             });
 
             tree_view.row_collapsed.connect ((iter, path) => {
+                if (syncing) return;
                 Value val;
                 store.get_value (iter, 1, out val);
                 string? url = val.get_string ();

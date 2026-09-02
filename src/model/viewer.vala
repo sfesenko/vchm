@@ -36,9 +36,9 @@ namespace Vchm.Model {
             find_case_sensitive = false;
         }
 
-        public void navigate (string url, string title, string chm_file) {
+        public void navigate (string url, string? title, string chm_file) {
             current_url = url;
-            current_title = title;
+            current_title = title ?? "";
             current_chm_file = chm_file;
             intended_url = url;
             loading = true;

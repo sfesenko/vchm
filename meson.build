@@ -176,4 +176,15 @@ if get_option('enable_render_test')
   )
 endif
 
+# Reopen integration test (Xvfb, checks Fort blank fix).
+# Always registered, but the script itself SKIPs if xvfb/import/Pillow are
+# missing, so a headless CI is never blocked. Uses a generated fixture so
+# it is hermetic.
+reopen_sh = join_paths(meson.project_source_root (), 'tools', 'test_reopen.sh')
+test('test reopen shell', find_program('bash'),
+  args: [reopen_sh, vchm, join_paths(meson.current_build_dir (), 'tests', 'basic.chm')],
+  env: ['GSETTINGS_BACKEND=memory'],
+  timeout: 30,
+)
+
 subdir('tests')

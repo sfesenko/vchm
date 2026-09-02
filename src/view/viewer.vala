@@ -325,6 +325,28 @@ namespace Vchm.View {
             });
         }
 
+        // Book change needs a clean slate: WebKit keeps the previous
+        // document's DOM, history and cached subresources. Reusing the
+        // same WebView for a different archive without clearing leaves
+        // stale state and, when the new URL has the same string as the
+        // old one (re-opening the same file), the equality guard
+        // `cur != loaded_url` skips the load and the view stays blank.
+        // Call this before binding a new BookContext.
+        public void invalidate_for_new_book () {
+            loaded_url = null;
+            loaded_book = null;
+            pending_restore_y = 0;
+            try { stop_loading (); } catch {}
+        }
+
+        public void reset_to_blank () {
+            invalidate_for_new_book ();
+            // Clear the previous document so a stale page is not flashed
+            // while the new one loads; about:blank is allow-listed in
+            // decide_policy and does not go through the chm: handler.
+            load_uri ("about:blank");
+        }
+
         // Load when the model's current URL differs from what we show.
         // Called from update() and on tab activation. The `force` flag
         // bypasses the cache-skip and always reloads — needed when a
