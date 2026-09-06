@@ -39,7 +39,7 @@ namespace Vchm.View {
             settings.enable_developer_extras = false;
             settings.enable_write_console_messages_to_stdout = false;
             settings.enable_page_cache = true;
-            var v_init = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            var v_init = model.current_book != null ? model.current_book.viewer : model.placeholder.viewer;
             settings.default_font_size = v_init.font_size;
             settings.default_font_family = v_init.font_family;
             settings.monospace_font_family = v_init.fixed_font_family;
@@ -63,16 +63,8 @@ namespace Vchm.View {
                     open_external (parameter.get_string ());
             });
 
-            var new_tab_action = new GLib.SimpleAction (
-                "open-new-tab", GLib.VariantType.STRING);
-            new_tab_action.activate.connect ((parameter) => {
-                if (parameter != null)
-                    dispatch (new OpenInNewTabMessage (parameter.get_string ()));
-            });
-
             var group = new GLib.SimpleActionGroup ();
             group.add_action (open_external_action);
-            group.add_action (new_tab_action);
             insert_action_group ("viewer", group);
 
             var find = get_find_controller ();
@@ -298,25 +290,6 @@ namespace Vchm.View {
         // overwritten by WebKit's layout/scroll reset (M1).
         private int pending_restore_y = 0;
 
-        public void save_scroll (AppModel model) {
-            string archive = book_path;
-            if (archive == "" && model.active_book != null) archive = model.active_book.chm_file.filename ();
-            else if (archive == "" ) archive = model.placeholder.chm_file.filename ();
-            if (archive == "" || !model.file_open) return;
-            // Query scrollY asynchronously; on result persist to per-book store.
-            evaluate_javascript.begin ("window.scrollY", -1, null, null, null, (obj, res) => {
-                try {
-                    var js_val = evaluate_javascript.end (res);
-                    if (js_val != null) {
-                        double d = js_val.to_double ();
-                        int y = (int) d;
-                        model.per_books.set_scroll (archive, y);
-                        model.settings.per_book_rows = model.per_books.save ();
-                    }
-                } catch (Error e) {}
-            });
-        }
-
         public void restore_scroll (int y) {
             if (y <= 0) return;
             var js = "window.scrollTo(0, %d)".printf (y);
@@ -353,11 +326,11 @@ namespace Vchm.View {
         // tab is re-shown after being hidden, because WebKit may have
         // unloaded the page contents while the tab was off-screen.
         public void sync_if_needed (AppModel model, bool force = false) {
-            var v_sync = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+            var v_sync = model.current_book != null ? model.current_book.viewer : model.placeholder.viewer;
             var cur = v_sync.current_url;
             string book;
             if (book_path != "") book = book_path;
-            else if (model.active_book != null) book = model.active_book.chm_file.filename ();
+            else if (model.current_book != null) book = model.current_book.chm_file.filename ();
             else book = model.placeholder.chm_file.filename ();
             if (model.file_open && cur.length > 0 &&
                 (force || cur != loaded_url || book != loaded_book)) {
@@ -400,14 +373,14 @@ namespace Vchm.View {
                 case AppMessageKind.VIEWER_FONT_DECREASE:
                 case AppMessageKind.VIEWER_FONT_RESET: {
                     var settings = get_settings ();
-                    var v_f = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                    var v_f = model.current_book != null ? model.current_book.viewer : model.placeholder.viewer;
                     settings.default_font_size = v_f.font_size;
                     break;
                 }
 
                 case AppMessageKind.VIEWER_FONT_CHANGED: {
                     var settings = get_settings ();
-                    var v_fc = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                    var v_fc = model.current_book != null ? model.current_book.viewer : model.placeholder.viewer;
                     settings.default_font_size = v_fc.font_size;
                     settings.default_font_family = v_fc.font_family;
                     settings.monospace_font_family = v_fc.fixed_font_family;

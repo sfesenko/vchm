@@ -117,10 +117,10 @@ namespace Vchm.Model {
         // rewriting GSettings when nothing actually changed.
         public string fingerprint () {
             var sb = new StringBuilder ();
-            sb.append_printf ("%d;%d;%b;%d;", window_width, window_height,
-                               window_maximized, sash_position);
-            sb.append_printf ("%b;%b;%b;%b;%d;", show_topics, show_index,
-                               show_search, show_bookmarks, active_side_panel);
+            sb.append_printf ("%d;%d;%d;%d;", window_width, window_height,
+                               window_maximized ? 1 : 0, sash_position);
+            sb.append_printf ("%d;%d;%d;%d;%d;", show_topics ? 1 : 0, show_index ? 1 : 0,
+                               show_search ? 1 : 0, show_bookmarks ? 1 : 0, active_side_panel);
             sb.append_printf ("%d;%s;%s;", font_size, font_family,
                                fixed_font_family);
             sb.append_printf ("%d;%d;", per_book_expire_days, bookmarks_expire_days);

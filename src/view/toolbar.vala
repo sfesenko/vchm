@@ -49,12 +49,6 @@ namespace Vchm.View {
             };
             append (open_btn);
 
-            var close_btn = new Button.from_icon_name ("window-close-symbolic") {
-                tooltip_text = _("Close"),
-                action_name = "win." + AppView.ACTION_CLOSE
-            };
-            append (close_btn);
-
             var copy_btn = new Button.from_icon_name ("edit-copy-symbolic") {
                 tooltip_text = _("Copy selection")
             };

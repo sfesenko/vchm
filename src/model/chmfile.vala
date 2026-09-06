@@ -358,8 +358,8 @@ namespace Vchm.Model {
                     _chi_file = chm_open (stem + ".CHI");
                 }
 
-                _filename = filename;
-                register_self ();   // keyed by full path — AFTER _filename is set
+                _filename = GLib.File.new_for_path (filename).get_path () ?? filename;
+                register_self ();   // keyed by canonical full path — AFTER _filename is set
 
                 _title = "";
                 _home = "/";

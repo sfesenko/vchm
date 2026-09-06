@@ -132,7 +132,7 @@ namespace Vchm.Model {
 
         private void parse_hist_blob (PerBookState st, string blob) {
             if (blob.length == 0) return;
-            var p1 = blob.split (SUB1);
+            var p1 = blob.split (SUB1, 2);
             if (p1.length == 0) return;
             int idx = -1;
             int.try_parse (p1[0], out idx);
@@ -230,7 +230,7 @@ namespace Vchm.Model {
         public bool prune (int expire_days) {
             if (expire_days <= 0) return false;
             int64 now = now_sec ();
-            int64 limit = expire_days * 86400;
+            int64 limit = (int64) expire_days * 86400;
             var to_remove = new Gee.ArrayList<string> ();
             foreach (var entry in by_book.entries) {
                 int64 age = now - entry.value.last_access;

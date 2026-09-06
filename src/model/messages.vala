@@ -3,17 +3,11 @@
 
 namespace Vchm.Model {
 
-    // ── Discriminator enum (drives the switch dispatch) ──
-    // Keep the enum entries in sync with the message classes below.
     public enum AppMessageKind {
-        // File operations
         OPEN_FILE,
         OPEN_FILE_DONE,
         OPEN_FILE_FAILED,
-        CLOSE_FILE,
         RECENT_FILE_ACTIVATED,
-
-        // Navigation
         NAVIGATE,
         NAVIGATE_DONE,
         NAVIGATE_FAILED,
@@ -21,30 +15,20 @@ namespace Vchm.Model {
         GO_FORWARD,
         GO_HOME,
         CONTEXT_ID_NAVIGATE,
-
-        // UI - Side panels
         TOGGLE_TOPICS_PANEL,
         TOGGLE_INDEX_PANEL,
         TOGGLE_SEARCH_PANEL,
         TOGGLE_BOOKMARKS_PANEL,
         SET_ACTIVE_SIDE_PANEL,
         SET_SASH_POSITION,
-
-        // Topics tree
         TOPICS_SELECTION_CHANGED,
         TOPICS_ITEM_EXPANDED,
         TOPICS_ITEM_COLLAPSED,
-
-        // Index
         INDEX_FILTER_CHANGED,
         INDEX_SELECTION_CHANGED,
         INDEX_NEXT,
         INDEX_PREV,
-
-        // Panels
         PANELS_REBUILT,
-
-        // Search
         SEARCH_QUERY_CHANGED,
         SEARCH_EXECUTE,
         SEARCH_DONE,
@@ -52,8 +36,6 @@ namespace Vchm.Model {
         SEARCH_NEXT,
         SEARCH_PREV,
         SEARCH_OPTIONS_CHANGED,
-
-        // Viewer
         VIEWER_FONT_INCREASE,
         VIEWER_FONT_DECREASE,
         VIEWER_FONT_RESET,
@@ -64,8 +46,6 @@ namespace Vchm.Model {
         VIEWER_FIND_COUNT,
         VIEWER_PRINT,
         VIEWER_COPY,
-
-        // History
         HISTORY_CLEAR,
         SET_ENCODING,
         BOOKMARK_ADD,
@@ -73,46 +53,31 @@ namespace Vchm.Model {
         BOOKMARK_RENAME,
         BOOKMARK_JUMP,
         BOOKMARKS_CHANGED,
-        OPEN_IN_NEW_TAB,
-
-        // Tab lifecycle
-        TAB_ACTIVATED,
-        NEXT_TAB,
-        PREV_TAB,
-
-        // Link hover
         LINK_HOVERED,
-
-        // Window
         WINDOW_STATE_CHANGED,
         WINDOW_MAXIMIZED_CHANGED,
-
-        // Toast/Notifications
         SHOW_TOAST,
-
-        // Application
         APP_QUIT,
         APP_QUIT_INTERNAL,
         ABOUT_DIALOG,
         PREFERENCES_DIALOG,
-
         SET_PER_BOOK_EXPIRE,
         SET_BOOKMARKS_EXPIRE,
+        PRESENT_WINDOW,
+        TEST_REOPEN,
     }
 
-    // ── Base class ──
     public abstract class AppMessage {
         public abstract AppMessageKind kind { get; }
     }
 
-    // ── File operations ──
     public class OpenFileMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.OPEN_FILE; } }
         public string path { get; private set; }
-        public int? context_id { get; private set; }
-        public OpenFileMessage (string path, int? context_id = null) {
+        public uint gen { get; private set; }
+        public OpenFileMessage (string path, uint gen = 0) {
             this.path = path;
-            this.context_id = context_id;
+            this.gen = gen;
         }
     }
 
@@ -122,11 +87,13 @@ namespace Vchm.Model {
         public string title { get; private set; }
         public string home_page { get; private set; }
         public BookContext ctx { get; private set; }
-        public OpenFileDoneMessage (string path, string title, string home_page, BookContext? ctx = null) {
+        public uint gen { get; private set; }
+        public OpenFileDoneMessage (string path, string title, string home_page, BookContext? ctx = null, uint gen = 0) {
             this.path = path;
             this.title = title;
             this.home_page = home_page;
             this.ctx = ctx;
+            this.gen = gen;
         }
     }
 
@@ -134,14 +101,12 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.OPEN_FILE_FAILED; } }
         public string path { get; private set; }
         public string error { get; private set; }
-        public OpenFileFailedMessage (string path, string error) {
+        public uint gen { get; private set; }
+        public OpenFileFailedMessage (string path, string error, uint gen = 0) {
             this.path = path;
             this.error = error;
+            this.gen = gen;
         }
-    }
-
-    public class CloseFileMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.CLOSE_FILE; } }
     }
 
     public class RecentFileActivatedMessage : AppMessage {
@@ -150,21 +115,15 @@ namespace Vchm.Model {
         public RecentFileActivatedMessage (string path) { this.path = path; }
     }
 
-    // ── Navigation ──
     public class NavigateMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.NAVIGATE; } }
         public string url { get; private set; }
         public string? title { get; private set; }
-        // Which tab this navigation belongs to. The worker runs off
-        // the main thread; without tab_index the NAVIGATE_DONE
-        // handler writes to whichever tab is currently active in
-        // the shared model, which may be a different one if the user
-        // switched tabs mid-load (F26 follow-up).
-        public int tab_index { get; private set; }
-        public NavigateMessage (string url, string? title = null, int tab_index = -1) {
+        public uint gen { get; private set; }
+        public NavigateMessage (string url, string? title = null, uint gen = 0) {
             this.url = url;
             this.title = title;
-            this.tab_index = tab_index;
+            this.gen = gen;
         }
     }
 
@@ -172,16 +131,13 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.NAVIGATE_DONE; } }
         public string url { get; private set; }
         public string title { get; private set; }
-        // Original NAVIGATE target this result belongs to. The single
-        // model.intended_url slot races when a second navigation starts
-        // before the first worker reports back (review F7).
         public string intended_url { get; private set; }
-        public int tab_index { get; private set; }
-        public NavigateDoneMessage (string url, string title, string? intended_url = null, int tab_index = -1) {
+        public uint gen { get; private set; }
+        public NavigateDoneMessage (string url, string title, string? intended_url = null, uint gen = 0) {
             this.url = url;
             this.title = title;
             this.intended_url = intended_url ?? url;
-            this.tab_index = tab_index;
+            this.gen = gen;
         }
     }
 
@@ -213,7 +169,6 @@ namespace Vchm.Model {
         public ContextIdNavigateMessage (int context_id) { this.context_id = context_id; }
     }
 
-    // ── Side panels ──
     public class ToggleTopicsPanelMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.TOGGLE_TOPICS_PANEL; } }
     }
@@ -232,7 +187,7 @@ namespace Vchm.Model {
 
     public class SetActiveSidePanelMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SET_ACTIVE_SIDE_PANEL; } }
-        public int panel { get; private set; } // 0=topics, 1=index, 2=search
+        public int panel { get; private set; }
         public SetActiveSidePanelMessage (int panel) { this.panel = panel; }
     }
 
@@ -242,7 +197,6 @@ namespace Vchm.Model {
         public SetSashPositionMessage (int position) { this.position = position; }
     }
 
-    // ── Topics tree ──
     public class TopicsSelectionChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.TOPICS_SELECTION_CHANGED; } }
         public string url { get; private set; }
@@ -261,7 +215,6 @@ namespace Vchm.Model {
         public TopicsItemCollapsedMessage (string url) { this.url = url; }
     }
 
-    // ── Index ──
     public class IndexFilterChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.INDEX_FILTER_CHANGED; } }
         public string filter { get; private set; }
@@ -282,20 +235,18 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.INDEX_PREV; } }
     }
 
-    // ── Panels ──
     public class PanelsRebuiltMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.PANELS_REBUILT; } }
         public TopicsModel topics { get; private set; }
         public IndexModel index { get; private set; }
-        public int tab_index { get; private set; }
-        public PanelsRebuiltMessage (TopicsModel topics, IndexModel index, int tab_index = -1) {
+        public uint gen { get; private set; }
+        public PanelsRebuiltMessage (TopicsModel topics, IndexModel index, uint gen = 0) {
             this.topics = topics;
             this.index = index;
-            this.tab_index = tab_index;
+            this.gen = gen;
         }
     }
 
-    // ── Search ──
     public class SearchQueryChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SEARCH_QUERY_CHANGED; } }
         public string query { get; private set; }
@@ -309,10 +260,10 @@ namespace Vchm.Model {
     public class SearchDoneMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SEARCH_DONE; } }
         public Gee.ArrayList<SearchResult> results { get; private set; }
-        public int tab_index { get; private set; }
-        public SearchDoneMessage (Gee.ArrayList<SearchResult> results, int tab_index = -1) {
+        public uint gen { get; private set; }
+        public SearchDoneMessage (Gee.ArrayList<SearchResult> results, uint gen = 0) {
             this.results = results;
-            this.tab_index = tab_index;
+            this.gen = gen;
         }
     }
 
@@ -340,7 +291,6 @@ namespace Vchm.Model {
         }
     }
 
-    // ── Viewer ──
     public class ViewerFontIncreaseMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.VIEWER_FONT_INCREASE; } }
     }
@@ -417,30 +367,6 @@ namespace Vchm.Model {
         public BookmarkJumpMessage (string url) { this.url = url; }
     }
 
-    public class OpenInNewTabMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.OPEN_IN_NEW_TAB; } }
-        public string url { get; private set; }
-        public OpenInNewTabMessage (string url) { this.url = url; }
-    }
-
-    public class TabActivatedMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.TAB_ACTIVATED; } }
-        public int tab_index { get; private set; }
-        public string book_path { get; private set; }
-        public TabActivatedMessage (int tab_index, string book_path) {
-            this.tab_index = tab_index;
-            this.book_path = book_path;
-        }
-    }
-
-    public class NextTabMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.NEXT_TAB; } }
-    }
-
-    public class PrevTabMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.PREV_TAB; } }
-    }
-
     public class LinkHoveredMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.LINK_HOVERED; } }
         public string? url { get; private set; }
@@ -467,12 +393,10 @@ namespace Vchm.Model {
         public ViewerFindCountMessage (uint match_count) { this.match_count = match_count; }
     }
 
-    // ── History ──
     public class HistoryClearMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.HISTORY_CLEAR; } }
     }
 
-    // ── Window ──
     public class WindowStateChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.WINDOW_STATE_CHANGED; } }
         public int width { get; private set; }
@@ -488,7 +412,6 @@ namespace Vchm.Model {
         public WindowMaximizedChangedMessage (bool maximized) { this.maximized = maximized; }
     }
 
-    // ── Application ──
     public class QuitMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.APP_QUIT_INTERNAL; } }
         public int width { get; private set; }
@@ -523,5 +446,13 @@ namespace Vchm.Model {
         public override AppMessageKind kind { get { return AppMessageKind.SET_BOOKMARKS_EXPIRE; } }
         public int days { get; private set; }
         public SetBookmarksExpireMessage (int days) { this.days = days; }
+    }
+
+    public class PresentWindowMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.PRESENT_WINDOW; } }
+    }
+
+    public class TestReopenMessage : AppMessage {
+        public override AppMessageKind kind { get { return AppMessageKind.TEST_REOPEN; } }
     }
 }

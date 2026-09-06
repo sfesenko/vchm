@@ -68,8 +68,7 @@ namespace Vchm.View {
         public void update (AppMessage msg, AppModel model) {
             switch (msg.kind) {
                 case AppMessageKind.OPEN_FILE_DONE:
-                case AppMessageKind.NAVIGATE_DONE:
-                case AppMessageKind.CLOSE_FILE: {
+                case AppMessageKind.NAVIGATE_DONE: {
                     status_label.label = model.status_text;
                     break;
                 }

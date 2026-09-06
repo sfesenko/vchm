@@ -14,7 +14,7 @@ void test_viewer_invalidate_forces_reload () {
     ctx.viewer.current_url = "/page.html";
     ctx.viewer.current_title = "Page";
     model.add_book (ctx);
-    model.active_book = ctx;
+    model.current_book = ctx;
     model.file_open = true;
     // Basic sanity: model viewer is accessible
     assert (model.viewer.current_url == "/page.html");
@@ -108,7 +108,7 @@ void test_open_close_reopen_model () {
     ctx1.home = ctx1.chm_file.home_page ();
     ctx1.topics.build_from_chm (ctx1.chm_file);
     model.add_book (ctx1);
-    model.active_book = ctx1;
+    model.current_book = ctx1;
     model.file_open = true;
     ctx1.viewer.current_url = ctx1.home;
     ctx1.viewer.current_title = ctx1.title;
@@ -126,7 +126,7 @@ void test_open_close_reopen_model () {
     // Close (simulates CloseFileMessage handling)
     foreach (var c in model.books) c.chm_file.close ();
     model.clear_books ();
-    model.active_book = null;
+    model.current_book = null;
     model.file_open = false;
     assert (model.books.size == 0);
     assert (!model.file_open);
@@ -140,19 +140,19 @@ void test_open_close_reopen_model () {
     ctx2.home = ctx2.chm_file.home_page ();
     ctx2.topics.build_from_chm (ctx2.chm_file);
     model.add_book (ctx2);
-    model.active_book = ctx2;
+    model.current_book = ctx2;
     model.file_open = true;
     string restored = model.per_books.get_last_url (ctx2.chm_file.filename ());
     assert (restored == test_url);
     ctx2.viewer.current_url = restored;
     assert (ctx2.viewer.current_url == test_url);
-    assert (model.active_book == ctx2);
+    assert (model.current_book == ctx2);
     assert (model.file_open);
 
     // Cleanup
     foreach (var c in model.books) c.chm_file.close ();
     model.clear_books ();
-    model.active_book = null;
+    model.current_book = null;
     model.file_open = false;
 }
 
@@ -171,7 +171,7 @@ void test_reopen_preserves_per_book_state () {
     ctx.title = "Test";
     ctx.home = ctx.chm_file.home_page ();
     model.add_book (ctx);
-    model.active_book = ctx;
+    model.current_book = ctx;
     model.file_open = true;
 
     // Set some per-book state
@@ -186,7 +186,7 @@ void test_reopen_preserves_per_book_state () {
 
     foreach (var c in model.books) c.chm_file.close ();
     model.clear_books ();
-    model.active_book = null;
+    model.current_book = null;
     model.file_open = false;
     // Per-book should survive close
     assert (model.per_books.get_scroll (path) == 123);
@@ -196,14 +196,14 @@ void test_reopen_preserves_per_book_state () {
     var ctx2 = new BookContext ();
     assert (ctx2.chm_file.load (fixture));
     model.add_book (ctx2);
-    model.active_book = ctx2;
+    model.current_book = ctx2;
     model.file_open = true;
     assert (model.per_books.get_scroll (path) == 123);
     assert (model.per_books.get_last_url (path) == "/page1.html");
 
     foreach (var c in model.books) c.chm_file.close ();
     model.clear_books ();
-    model.active_book = null;
+    model.current_book = null;
     model.file_open = false;
     ctx.chm_file.close ();
     ctx2.chm_file.close ();

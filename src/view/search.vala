@@ -155,7 +155,7 @@ namespace Vchm.View {
         }
 
         public void notify_active_changed (AppModel model) {
-            var s_na = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            var s_na = model.current_book != null ? model.current_book.search : model.placeholder.search;
             populating = true;
             query_entry.text = s_na.query;
             populating = false;
@@ -163,7 +163,7 @@ namespace Vchm.View {
         }
 
         public void update (AppMessage msg, AppModel model) {
-            var s_up = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            var s_up = model.current_book != null ? model.current_book.search : model.placeholder.search;
             switch (msg.kind) {
                 case AppMessageKind.SEARCH_QUERY_CHANGED: {
                     // GTK4 set_text re-emits ::changed even for the same
@@ -177,19 +177,7 @@ namespace Vchm.View {
                     }
                     break;
                 }
-
-                case AppMessageKind.TAB_ACTIVATED: {
-                    // New active tab: drop the old results, show the
-                    // new tab's search model (which is empty until the
-                    // user runs a new search).
-                    populating = true;
-                    query_entry.text = s_up.query;
-                    populating = false;
-                    rebuild_results (model);
-                    break;
-                }
-
-                case AppMessageKind.SEARCH_EXECUTE: {
+case AppMessageKind.SEARCH_EXECUTE: {
                     // Triggered by button or Enter
                     break;
                 }
@@ -200,7 +188,7 @@ namespace Vchm.View {
                 }
 
                 case AppMessageKind.SEARCH_OPTIONS_CHANGED: {
-                    var s_op = model.active_book != null ? model.active_book.search : model.placeholder.search;
+                    var s_op = model.current_book != null ? model.current_book.search : model.placeholder.search;
                     whole_words_check.active = s_op.whole_words;
                     titles_only_check.active = s_op.titles_only;
                     break;
@@ -222,7 +210,7 @@ namespace Vchm.View {
         }
 
         private void rebuild_results (AppModel model) {
-            var s_rb = model.active_book != null ? model.active_book.search : model.placeholder.search;
+            var s_rb = model.current_book != null ? model.current_book.search : model.placeholder.search;
             syncing = true;
             store.clear ();
             foreach (var result in s_rb.results) {

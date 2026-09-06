@@ -111,13 +111,13 @@ namespace Vchm.View {
             if (model.file_open) {
                 index_loaded_for = "";
                 rebuild_list (model);
-                var cur = model.active_book != null ? model.active_book : model.placeholder;
+                var cur = model.current_book != null ? model.current_book : model.placeholder;
                 index_loaded_for = cur.chm_file.filename ();
             }
         }
 
         public void update (AppMessage msg, AppModel model) {
-            var idx_cur = model.active_book != null ? model.active_book : model.placeholder;
+            var idx_cur = model.current_book != null ? model.current_book : model.placeholder;
             switch (msg.kind) {
                 case AppMessageKind.OPEN_FILE_DONE:
                 case AppMessageKind.NAVIGATE_DONE: {
@@ -126,23 +126,6 @@ namespace Vchm.View {
                         index_loaded_for = book;
                         rebuild_list (model);
                     }
-                    break;
-                }
-
-                case AppMessageKind.TAB_ACTIVATED: {
-                    // Legacy via Elmish; also via notify_active_changed
-                    if (model.file_open) {
-                        index_loaded_for = "";   // bypass the guard
-                        rebuild_list (model);
-                        index_loaded_for = idx_cur.chm_file.filename ();
-                    }
-                    break;
-                }
-
-                case AppMessageKind.CLOSE_FILE: {
-                    index_loaded_for = "";
-                    store.clear ();
-                    status_label.visible = false;
                     break;
                 }
 
@@ -179,7 +162,7 @@ namespace Vchm.View {
 
         private void rebuild_list (AppModel model) {
             store.clear ();
-            var idx_rb = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            var idx_rb = model.current_book != null ? model.current_book.index : model.placeholder.index;
             foreach (var entry in idx_rb.entries) {
                 TreeIter iter;
                 store.append (out iter);
@@ -189,7 +172,7 @@ namespace Vchm.View {
         }
 
         private void update_status (AppModel model) {
-            var idx_st = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            var idx_st = model.current_book != null ? model.current_book.index : model.placeholder.index;
             if (idx_st.entries.size > 0) {
                 status_label.visible = false;
                 status_label.label = "";
@@ -200,7 +183,7 @@ namespace Vchm.View {
         }
 
         private void apply_filter (AppModel model) {
-            var idx_af = model.active_book != null ? model.active_book.index : model.placeholder.index;
+            var idx_af = model.current_book != null ? model.current_book.index : model.placeholder.index;
             var filter = idx_af.filter_text.down ();
             update_status (model);
             // Programmatic repopulation + cursor set must not look like

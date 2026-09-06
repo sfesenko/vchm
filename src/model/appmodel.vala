@@ -5,9 +5,6 @@ using Vchm.Model;
 
 namespace Vchm.Model {
 
-    // Main application model containing all sub-models
-    // One opened archive with everything derived from it. Lives at
-    // namespace scope so messages can carry it between worker and UI.
     public class BookContext : Object {
         public CHMFile chm_file { get; set; default = new CHMFile (); }
         public TopicsModel topics { get; set; default = new TopicsModel (); }
@@ -21,255 +18,122 @@ namespace Vchm.Model {
     }
 
     public class AppModel : Object {
-        // B+hybrid TabModel: each BookContext owns its sub-models (chm_file,
-        // topics, index, history, search, viewer). AppModel owns the list
-        // of tabs and the active_book pointer. A single placeholder
-        // BookContext backs the proxy getters when no book is open (initial
-        // window, last tab closed). This replaces the old separate
-        // _scratch_* slots and makes TabModel the owner; proxy getters just
-        // delegate to current_ctx for compat during migration (new code
-        // should use model.active_book.* explicitly).
         private BookContext? _active_ctx = null;
-        private BookContext _placeholder = new BookContext ();
-        public BookContext placeholder { get { return _placeholder; } }
-        public BookContext current_ctx { get { return _active_ctx ?? _placeholder; } }
+        private BookContext _empty_book = new BookContext ();
+        // Deprecated aliases for one-commit migration — new code uses current_book/_empty_book
+        public BookContext placeholder { get { return _empty_book; } }
+        public BookContext current_ctx { get { return _active_ctx ?? _empty_book; } }
         public CHMFile chm_file {
             get { return current_ctx.chm_file; }
-            set { current_ctx.chm_file = value; }
+            set { current_ctx.chm_file = value; notify_property ("chm-file"); }
         }
         public TopicsModel topics {
             get { return current_ctx.topics; }
-            set { current_ctx.topics = value; }
+            set { current_ctx.topics = value; notify_property ("topics"); }
         }
         public IndexModel index {
             get { return current_ctx.index; }
-            set { current_ctx.index = value; }
+            set { current_ctx.index = value; notify_property ("index"); }
         }
         public HistoryModel history {
             get { return current_ctx.history; }
-            set { current_ctx.history = value; }
+            set { current_ctx.history = value; notify_property ("history"); }
         }
         public SearchModel search {
             get { return current_ctx.search; }
-            private set { current_ctx.search = value; }
+            private set { current_ctx.search = value; notify_property ("search"); }
         }
-        // Per-tab viewer (per BookContext). Proxy delegates to current_ctx.
         public ViewerModel viewer {
             get { return current_ctx.viewer; }
-            set { current_ctx.viewer = value; }
+            set { current_ctx.viewer = value; notify_property ("viewer"); }
         }
         public SettingsModel settings { get; private set; }
         public BookmarkStore bookmarks { get; private set; }
         public PerBookStore per_books { get; private set; }
 
-        // All opened books; [0] mirrors the "active" pointers below.
-        // B+hybrid: tabs is the hierarchical collection; books kept as alias for compat.
-        private Gee.ArrayList<BookContext> _books = new Gee.ArrayList<BookContext> ();
+        // Single-book: exactly one active context
+        public BookContext? current_book {
+            get { return _active_ctx; }
+            set { set_active (value); }
+        }
+        // Alias for migration
+        public BookContext? active_book {
+            get { return current_book; }
+            set { current_book = value; }
+        }
+
+        // Deprecated tabs/books shim — single-book has no tabs. Kept to keep old tests compiling one commit; will be removed.
+        private Gee.ArrayList<BookContext> _books_compat = new Gee.ArrayList<BookContext> ();
         public Gee.ArrayList<BookContext> books {
-            get { return _books; }
-            set { _books = value; notify_property ("books"); notify_property ("tabs"); }
+            get { return _books_compat; }
+            set { _books_compat = value; notify_property ("books"); notify_property ("tabs"); }
         }
         public Gee.ArrayList<BookContext> tabs {
-            get { return _books; }
-        }
-        public BookContext? active_book {
-            get { return _active_ctx; }
-            set {
-                if (_active_ctx == value) return;
-                _active_ctx = value;
-                // Keep active_tab_index in sync with active_book
-                if (value != null) {
-                    int idx = _books.index_of (value);
-                    if (idx >= 0 && idx != _active_tab_index) {
-                        _active_tab_index = idx;
-                        notify_property ("active-tab-index");
-                    }
-                }
-                // Notify proxy properties whose getter changes with active_book
-                notify_property ("active-book");
-                notify_property ("chm-file");
-                notify_property ("topics");
-                notify_property ("index");
-                notify_property ("history");
-                notify_property ("search");
-                notify_property ("viewer");
-                notify_property ("history-navigation-in-progress");
-                notify_property ("current-tab");
-            }
+            get { return _books_compat; }
         }
         public BookContext? current_tab {
-            owned get {
-                if (_active_tab_index >= 0 && _active_tab_index < _books.size) return _books[_active_tab_index];
-                return _active_ctx;
-            }
+            owned get { return _active_ctx; }
         }
         private int _active_tab_index = -1;
-        // Index of the currently active tab in AppView.tabs[]. Set
-        // by AppView.activate_tab_idx. Read by app-update when
-        // dispatching NAVIGATE so the resulting NavigateMessage
-        // carries the correct tab_index — the worker snapshot still
-        // uses the shared model.chm_file (which the proxy routes to
-        // the active tab), but the tab_index lets NAVIGATE_DONE
-        // route its writes to the right tab even if the user has
-        // switched tabs in the meantime.
         public int active_tab_index {
             get { return _active_tab_index; }
             set {
                 if (_active_tab_index == value) return;
                 _active_tab_index = value;
-                // Sync active_book to match index without recursion
-                if (value >= 0 && value < _books.size) {
-                    var b = _books[value];
-                    if (_active_ctx != b) {
-                        _active_ctx = b;
-                        notify_property ("active-book");
-                        notify_property ("chm-file");
-                        notify_property ("topics");
-                        notify_property ("index");
-                        notify_property ("history");
-                        notify_property ("search");
-                        notify_property ("viewer");
-                        notify_property ("history-navigation-in-progress");
-                        notify_property ("current-tab");
-                    }
-                }
                 notify_property ("active-tab-index");
                 notify_property ("current-tab");
             }
         }
-
-        // B+hybrid helpers that keep notify in sync
-        public void add_book (BookContext ctx) {
-            _books.add (ctx);
-            notify_property ("books");
-            notify_property ("tabs");
-        }
-        public void insert_book (int idx, BookContext ctx) {
-            _books.insert (idx, ctx);
-            notify_property ("books");
-            notify_property ("tabs");
-        }
-        public void remove_book_at (int idx) {
-            _books.remove_at (idx);
-            notify_property ("books");
-            notify_property ("tabs");
-        }
-        public void clear_books () {
-            _books.clear ();
-            notify_property ("books");
-            notify_property ("tabs");
-        }
+        public void add_book (BookContext ctx) { _books_compat.add (ctx); notify_property ("books"); notify_property ("tabs"); }
+        public void insert_book (int idx, BookContext ctx) { _books_compat.insert (idx, ctx); notify_property ("books"); notify_property ("tabs"); }
+        public void remove_book_at (int idx) { _books_compat.remove_at (idx); notify_property ("books"); notify_property ("tabs"); }
+        public void clear_books () { _books_compat.clear (); notify_property ("books"); notify_property ("tabs"); }
         public void reorder_books (int from, int to) {
-            if (from < 0 || from >= _books.size || to < 0 || to > _books.size) return;
-            var tmp = _books[from];
-            _books.remove_at (from);
+            if (from < 0 || from >= _books_compat.size || to < 0 || to > _books_compat.size) return;
+            var tmp = _books_compat[from];
+            _books_compat.remove_at (from);
             if (to > from) to--;
-            _books.insert (to, tmp);
-            notify_property ("books");
-            notify_property ("tabs");
+            _books_compat.insert (to, tmp);
+            notify_property ("books"); notify_property ("tabs");
         }
 
-    // BookContext lives inside AppModel scope for message carrying.
-
-        // UI state
         public bool file_open { get; set; }
         public string status_text { get; set; }
         public string? toast_message { get; set; }
 
-        // Set while a back/forward navigation is in flight so NAVIGATE_DONE
-        // does not push a duplicate entry and truncate forward history.
-        // Proxied to active BookContext; with strict single-tab-per-file
-        // global would work, but per-book is correct for clones.
         public bool history_navigation_in_progress {
             get { return current_ctx.history_navigation_in_progress; }
-            set { current_ctx.history_navigation_in_progress = value; }
+            set { current_ctx.history_navigation_in_progress = value; notify_property ("history-navigation-in-progress"); }
         }
 
-        // OPEN_FILE serialization (F26 follow-up): two concurrent open
-        // workers raced on model.books / model.viewer / tabs[].url and
-        // left the first tab blank. We now run at most one OPEN_FILE
-        // worker at a time across all paths; further opens are deferred
-        // to a Timeout that re-dispatches once the current worker calls
-        // release_open. Keyed by path so duplicate OPEN_FILE messages
-        // for the same book coalesce (a user double-clicking in the file
-        // dialog should not open the same book twice).
-        private GLib.Mutex _open_mutex = GLib.Mutex ();
-        // Set of paths with an open currently in flight (worker running
-        // or OPEN_FILE message queued). Single worker is enforced by
-        // checking against _any_in_flight, but the per-path set lets us
-        // coalesce duplicate messages for the same book.
-        private Gee.HashSet<string> _open_in_flight =
-            new Gee.HashSet<string> ();
-        private bool _any_open_in_flight = false;
+        public uint open_generation { get; set; default = 0; }
 
-        private string canon_open_key (string path) {
+        public void set_active (BookContext? ctx) {
+            if (_active_ctx != null && _active_ctx != ctx) {
+                _active_ctx.chm_file.close ();
+            }
+            _active_ctx = ctx;
+            file_open = (ctx != null);
+            notify_property ("active-book");
+            notify_property ("current-book");
+            notify_property ("chm-file");
+            notify_property ("topics");
+            notify_property ("index");
+            notify_property ("history");
+            notify_property ("search");
+            notify_property ("viewer");
+            notify_property ("history-navigation-in-progress");
+            notify_property ("current-tab");
+        }
+
+        public void clear_active () {
+            set_active (null);
+        }
+
+        public static string canon_open_key (string path) {
             return GLib.File.new_for_path (path).get_path () ?? path;
         }
 
-        private Gee.ArrayQueue<string> _open_queue = new Gee.ArrayQueue<string> ();
-
-        // Returns true if no other OPEN_FILE is running and no other
-        // OPEN_FILE is queued for the same path. Marks both flags so
-        // the next OPEN_FILE for any path is deferred.
-        public bool try_acquire_open (string path) {
-            string k = canon_open_key (path);
-            _open_mutex.lock ();
-            try {
-                if (_any_open_in_flight) return false;
-                if (_open_in_flight.contains (k)) return false;
-                _open_in_flight.add (k);
-                _any_open_in_flight = true;
-                return true;
-            } finally {
-                _open_mutex.unlock ();
-            }
-        }
-
-        public void enqueue_open (string path) {
-            string k = canon_open_key (path);
-            _open_mutex.lock ();
-            try {
-                if (_open_in_flight.contains (k)) return;
-                if (_open_queue.contains (k)) return;
-                _open_queue.offer (k);
-            } finally {
-                _open_mutex.unlock ();
-            }
-        }
-
-        public void release_open (string path) {
-            string k = canon_open_key (path);
-            _open_mutex.lock ();
-            try {
-                _open_in_flight.remove (k);
-                _any_open_in_flight = false;
-            } finally {
-                _open_mutex.unlock ();
-            }
-        }
-
-        // Release current slot and if queued paths remain, acquire the next
-        // one atomically and return it (caller should dispatch it).
-        public bool release_and_dequeue_next (string path, out string? next) {
-            string k = canon_open_key (path);
-            _open_mutex.lock ();
-            try {
-                _open_in_flight.remove (k);
-                if (!_open_queue.is_empty) {
-                    next = _open_queue.poll ();
-                    _open_in_flight.add (next);
-                    _any_open_in_flight = true;
-                    return true;
-                }
-                _any_open_in_flight = false;
-                next = null;
-                return false;
-            } finally {
-                _open_mutex.unlock ();
-            }
-        }
-
-        // The app's dispatch, injected by main after program construction
         private Elmish.Dispatch<AppMessage> parent_dispatch = AppModel.noop_dispatch;
         public static void noop_dispatch (AppMessage msg) {
         }
@@ -283,7 +147,6 @@ namespace Vchm.Model {
         }
 
         public AppModel () {
-            // placeholder already has defaults; no separate scratch init needed
             settings = new SettingsModel ();
             bookmarks = new BookmarkStore ();
             bookmarks.load (settings.bookmark_rows);
@@ -292,7 +155,6 @@ namespace Vchm.Model {
             per_books.load (settings.per_book_rows);
             if (per_books.prune (settings.per_book_expire_days)) settings.per_book_rows = per_books.save ();
 
-            // Apply saved viewer settings
             viewer.font_size = settings.font_size;
             viewer.font_family = settings.font_family;
             viewer.fixed_font_family = settings.fixed_font_family;
@@ -301,15 +163,10 @@ namespace Vchm.Model {
             status_text = _("Ready");
         }
 
-        // Flush the scratch sub-models into a BookContext (called by
-        // AppView when binding a book to a tab). Idempotent.
         public void bind_to (BookContext ctx) {
             _active_ctx = ctx;
-            // The scratch slots are kept in sync via the proxy
-            // accessors; explicit flush is a no-op now.
         }
 
-        // Method-bound mapper for Cmd.map
         public AppMessage to_app_message (AppMessage msg) {
             return msg;
         }

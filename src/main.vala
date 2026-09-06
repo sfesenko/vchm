@@ -93,7 +93,7 @@ int main (string[] args) {
         string rb = reopen_book;
         program.add_subscription ((dispatch) => {
             GLib.Timeout.add (3000, () => {
-                dispatch (new CloseFileMessage ());
+                dispatch (new TestReopenMessage ());
                 return false;
             });
             GLib.Timeout.add (5000, () => {

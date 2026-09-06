@@ -104,29 +104,14 @@ namespace Vchm.View {
         public void notify_active_changed (AppModel model) {
             built_root = null;
             rebuild_tree (model);
-            var t_sel = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
+            var t_sel = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
             select_url (t_sel.selected_url);
         }
 
         public void update (AppMessage msg, AppModel model) {
-            var t_up = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
+            var t_up = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
             switch (msg.kind) {
-
-                case AppMessageKind.CLOSE_FILE: {
-                    built_root = null;
-                    store.clear ();
-                    break;
-                }
-
-                case AppMessageKind.TAB_ACTIVATED: {
-                    // Legacy path: still handled via Elmish for incremental migration
-                    built_root = null;
-                    rebuild_tree (model);
-                    select_url (t_up.selected_url);
-                    break;
-                }
-
-                case AppMessageKind.TOPICS_SELECTION_CHANGED: {
+case AppMessageKind.TOPICS_SELECTION_CHANGED: {
                     // Selection initiated here already moved the cursor.
                     break;
                 }
@@ -164,7 +149,7 @@ namespace Vchm.View {
         private void rebuild_tree (AppModel model) {
             syncing = true;
             store.clear ();
-            var t_rb = model.active_book != null ? model.active_book.topics : model.placeholder.topics;
+            var t_rb = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
             if (t_rb.root != null) {
                 add_items_recursive (null, t_rb.root);
             }

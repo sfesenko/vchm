@@ -41,7 +41,7 @@ namespace Vchm.View {
             var btns = new Box (Orientation.HORIZONTAL, 6);
             var add_btn = new Button.with_label (_("Add"));
             add_btn.clicked.connect (() => {
-                var v_add = model.active_book != null ? model.active_book.viewer : model.placeholder.viewer;
+                var v_add = model.current_book != null ? model.current_book.viewer : model.placeholder.viewer;
                 if (v_add.current_url.length > 0 && model.file_open)
                     dispatch (new BookmarkAddMessage ());
             });
@@ -95,7 +95,7 @@ namespace Vchm.View {
         }
 
         private Gee.ArrayList<Bookmark>? current_list () {
-            var c_cur = model.active_book != null ? model.active_book : model.placeholder;
+            var c_cur = model.current_book != null ? model.current_book : model.placeholder;
             if (!c_cur.chm_file.is_open ()) return null;
             return model.bookmarks.for_book (c_cur.chm_file.filename ());
         }
@@ -103,12 +103,12 @@ namespace Vchm.View {
         public void notify_active_changed (AppModel model) {
             populated_for = "";
             repopulate ();
-            var c_not = model.active_book != null ? model.active_book : model.placeholder;
+            var c_not = model.current_book != null ? model.current_book : model.placeholder;
             populated_for = c_not.chm_file.is_open () ? c_not.chm_file.filename () : "";
         }
 
         public void update (AppMessage msg, AppModel model) {
-            var c_up = model.active_book != null ? model.active_book : model.placeholder;
+            var c_up = model.current_book != null ? model.current_book : model.placeholder;
             switch (msg.kind) {
                 case AppMessageKind.OPEN_FILE_DONE:
                 case AppMessageKind.BOOKMARKS_CHANGED:
@@ -122,17 +122,7 @@ namespace Vchm.View {
                     }
                     break;
                 }
-
-                case AppMessageKind.TAB_ACTIVATED: {
-                    // Legacy via Elmish; also via notify_active_changed
-                    populated_for = "";   // bypass the guard
-                    repopulate ();
-                    populated_for = c_up.chm_file.is_open ()
-                        ? c_up.chm_file.filename () : "";
-                    break;
-                }
-
-                default:
+default:
                     break;
             }
         }
