@@ -10,7 +10,6 @@ namespace Vchm.Model {
         // byte length 1:1, so offsets computed on the lowered copy stay
         // valid in the original — full down() can resync UTF-8 (e.g. 'İ'
         // lowers to a two-char sequence) and desync paired indexes
-        // (review F24).
         public static string ascii_down (string s) {
             var buf = new uint8[s.length + 1];
             Memory.copy (buf, s.data, s.length);
@@ -174,7 +173,7 @@ namespace Vchm.Model {
 
         // Decode named/numeric byte-entities ("&eth;" = CP1251 0xF0) into
         // raw bytes and convert ONLY those runs through the archive
-        // charset (fixup_name approach, review F10). Literal non-ASCII
+        // charset (fixup_name approach). Literal non-ASCII
         // text is genuine Unicode already — re-converting the whole
         // buffer mangled it whenever the archive hint was legacy but the
         // document real UTF-8. Reserved markup entities are preserved.

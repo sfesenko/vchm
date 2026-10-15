@@ -21,8 +21,8 @@
       <image>https://example.com/screenshot.png</image>
     </screenshot>
   </screenshots>
-  <url type="homepage">https://github.com/***REMOVED***/vchm</url>
-  <url type="bugtracker">https://github.com/***REMOVED***/vchm/issues</url>
+  <url type="homepage">https://github.com/sfesenko/vchm</url>
+  <url type="bugtracker">https://github.com/sfesenko/vchm/issues</url>
   <project_license>MIT</project_license>
   <categories>
     <category>Office</category>

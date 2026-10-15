@@ -37,7 +37,7 @@ chmlib_sources = [
 # Vendored chmlib header. Listed
 # FIRST on the include path so every consumer — the vendored C sources
 # and all Vala-generated code — resolves chm_lib.h to our copy instead
-# of a possibly ABI-skewed system one (review F19).
+# of a possibly ABI-skewed system one.
 inc_compat = include_directories('compat')
 
 chmlib_lib = static_library('chmlib',
@@ -109,7 +109,6 @@ app_sources = [
     'src/view/toolbar.vala',
     'src/view/statusbar.vala',
     'src/view/contextmenu.vala',
-    'src/view/view.vala',
 ]
 
 vchm = executable(
@@ -161,13 +160,9 @@ if get_option('enable_render_test')
     join_paths(meson.current_build_dir (), 'tests', 'book_cp1251.chm'),
     join_paths(meson.current_build_dir (), 'tests', 'book_koi8u.chm'),
   ]
-  # Optional 4th fixture: a real multi-chapter CP1251 book from the
-  # developer's library. Skipped if not present so the test stays
-  # hermetic on a fresh checkout.
-  arch_book = '***REMOVED***//Documents/Books/<redacted>.chm'
-  if run_command('test', '-f', arch_book, check: false).returncode() == 0
-    render_fixtures += [arch_book]
-  endif
+  # book_cp1251.chm above already provides a multi-chapter CP1251 book
+  # (Ukrainian pages, image subresource, entities, relative + ../ links),
+  # so no developer-local book is needed here and the test stays hermetic.
   test('test render smoke', vchm,
     args: [smoke_render, vchm] + render_fixtures,
     env: [

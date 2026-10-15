@@ -25,10 +25,10 @@ namespace Vchm.View {
 
         private static bool s_scheme_registered = false;
 
-        // Which archive this tab renders (full path; set by the shell on
-        // creation). Full path instead of basename: two open books may
-        // share a basename and must not collide in the registry or URIs
-        // (review F5).
+        // Which archive this view renders (full path; set by the shell when the
+        // view is created). Full path rather than basename: two archives
+        // may share a basename (/en/help.chm vs /uk/help.chm) and must
+        // not collide in the CHMFile registry or in the chm:// URI.
         public string book_path { get; set; default = ""; }
 
         public void build_ui (Elmish.Dispatch<AppMessage> dispatch, AppModel model) {
@@ -120,10 +120,10 @@ namespace Vchm.View {
         }
 
         private bool on_decide_policy (WebView view, PolicyDecision decision, PolicyDecisionType decision_type) {
-            // target=_blank / window.open: no NEW_WINDOW_ACTION branch used
-            // to leave these dying silently in a hidden WebView. Route CHM
-            // targets into a new tab and externals to the desktop handler
-            // (review F12).
+            // target=_blank / window.open: without a NEW_WINDOW_ACTION
+            // branch these die silently in a hidden WebView. CHM targets
+            // navigate in place (single-book, one window); http(s)/mailto
+            // go to the desktop handler.
             if (decision_type == PolicyDecisionType.NEW_WINDOW_ACTION) {
                 var wnd_decision = (NavigationPolicyDecision) decision;
                 var wnd_action = wnd_decision.get_navigation_action ();
@@ -173,8 +173,8 @@ namespace Vchm.View {
                 // Same-document anchor (<a href="#sec">): stripping the
                 // fragment yields the page we are already showing — hand
                 // the jump to WebKit instead of redispatching NAVIGATE,
-                // which was a no-op for the already-loaded URL and never
-                // scrolled (review F3). Book segment must match too.
+                // which is a no-op for the already-loaded URL and never
+                // scrolls. Book segment must match too.
                 int hash = uri.index_of ("#");
                 if (hash >= 0 && loaded_url != null && loaded_url.length > 0 &&
                     uri.has_prefix ("chm://" +
@@ -213,7 +213,7 @@ namespace Vchm.View {
             // Unknown schemes (file:, ftp:, …): never let them reach the
             // engine — the CSP restricts subresources, not top-level
             // navigation, so the default-use fallback rendered local
-            // files from inside book content (review F11).
+            // files from inside book content.
             nav_decision.ignore ();
             return true;
         }

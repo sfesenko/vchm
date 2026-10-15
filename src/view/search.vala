@@ -17,7 +17,6 @@ namespace Vchm.View {
         private ScrolledWindow scrolled;
         private Label status_label;
         // Guards against programmatic set_text re-entering ::changed
-        // (review F1).
         private bool populating = false;
         // Guards against programmatic cursor moves (results rebuild)
         // re-entering the navigate-on-select handler.
@@ -169,7 +168,7 @@ namespace Vchm.View {
                     // GTK4 set_text re-emits ::changed even for the same
                     // value — without the same-value guard + populating
                     // flag every programmatic set re-dispatched the
-                    // message forever (review F1).
+                    // message forever.
                     if (query_entry.text != s_up.query) {
                         populating = true;
                         query_entry.text = s_up.query;
@@ -191,16 +190,6 @@ case AppMessageKind.SEARCH_EXECUTE: {
                     var s_op = model.current_book != null ? model.current_book.search : model.placeholder.search;
                     whole_words_check.active = s_op.whole_words;
                     titles_only_check.active = s_op.titles_only;
-                    break;
-                }
-
-                case AppMessageKind.SEARCH_NEXT: {
-                    select_relative (model, 1);
-                    break;
-                }
-
-                case AppMessageKind.SEARCH_PREV: {
-                    select_relative (model, -1);
                     break;
                 }
 
@@ -229,24 +218,6 @@ case AppMessageKind.SEARCH_EXECUTE: {
                 status_label.visible = true;
             }
             syncing = false;
-        }
-
-        private void select_relative (AppModel model, int delta) {
-            var n = store.iter_n_children (null);
-            if (n == 0) return;
-            
-            TreePath? path;
-            TreeViewColumn? column;
-            tree_view.get_cursor (out path, out column);
-            
-            int current = 0;
-            if (path != null) {
-                current = path.get_indices ()[0];
-            }
-            
-            int next = (current + delta + n) % n;
-            var new_path = new TreePath.from_indices (next);
-            tree_view.set_cursor (new_path, null, false);
         }
     }
 }

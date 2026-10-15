@@ -133,7 +133,7 @@ namespace Vchm.View {
                     // Encoding change swaps model.index wholesale while the
                     // filename stays the same — the filename guard above
                     // would keep the stale keyword list until the user
-                    // typed (review F9).
+                    // typed.
                     if (model.file_open) {
                         rebuild_list (model);
                     }
@@ -142,16 +142,6 @@ namespace Vchm.View {
 
                 case AppMessageKind.INDEX_FILTER_CHANGED: {
                     apply_filter (model);
-                    break;
-                }
-
-                case AppMessageKind.INDEX_NEXT: {
-                    select_relative (model, 1);
-                    break;
-                }
-
-                case AppMessageKind.INDEX_PREV: {
-                    select_relative (model, -1);
                     break;
                 }
 
@@ -201,24 +191,6 @@ namespace Vchm.View {
                 tree_view.set_cursor (path, null, false);
             }
             syncing = false;
-        }
-
-        private void select_relative (AppModel model, int delta) {
-            var n = store.iter_n_children (null);
-            if (n == 0) return;
-            
-            TreePath? path;
-            TreeViewColumn? column;
-            tree_view.get_cursor (out path, out column);
-            
-            int current = 0;
-            if (path != null) {
-                current = path.get_indices ()[0];
-            }
-            
-            int next = (current + delta + n) % n;
-            var new_path = new TreePath.from_indices (next);
-            tree_view.set_cursor (new_path, null, false);
         }
     }
 }

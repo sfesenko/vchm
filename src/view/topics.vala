@@ -100,7 +100,7 @@ namespace Vchm.View {
             append (scrolled);
         }
 
-        // B+hybrid: called via AppModel.notify["active-book"] (freeze/thaw batched) instead of via TAB_ACTIVATED
+        // B+hybrid: called via AppModel.notify["current-book"] (freeze/thaw batched) instead of via TAB_ACTIVATED
         public void notify_active_changed (AppModel model) {
             built_root = null;
             rebuild_tree (model);

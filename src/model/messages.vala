@@ -7,7 +7,6 @@ namespace Vchm.Model {
         OPEN_FILE,
         OPEN_FILE_DONE,
         OPEN_FILE_FAILED,
-        RECENT_FILE_ACTIVATED,
         NAVIGATE,
         NAVIGATE_DONE,
         NAVIGATE_FAILED,
@@ -26,15 +25,11 @@ namespace Vchm.Model {
         TOPICS_ITEM_COLLAPSED,
         INDEX_FILTER_CHANGED,
         INDEX_SELECTION_CHANGED,
-        INDEX_NEXT,
-        INDEX_PREV,
         PANELS_REBUILT,
         SEARCH_QUERY_CHANGED,
         SEARCH_EXECUTE,
         SEARCH_DONE,
         SEARCH_SELECTION_CHANGED,
-        SEARCH_NEXT,
-        SEARCH_PREV,
         SEARCH_OPTIONS_CHANGED,
         VIEWER_FONT_INCREASE,
         VIEWER_FONT_DECREASE,
@@ -46,7 +41,6 @@ namespace Vchm.Model {
         VIEWER_FIND_COUNT,
         VIEWER_PRINT,
         VIEWER_COPY,
-        HISTORY_CLEAR,
         SET_ENCODING,
         BOOKMARK_ADD,
         BOOKMARK_REMOVE,
@@ -109,11 +103,6 @@ namespace Vchm.Model {
         }
     }
 
-    public class RecentFileActivatedMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.RECENT_FILE_ACTIVATED; } }
-        public string path { get; private set; }
-        public RecentFileActivatedMessage (string path) { this.path = path; }
-    }
 
     public class NavigateMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.NAVIGATE; } }
@@ -227,13 +216,7 @@ namespace Vchm.Model {
         public IndexSelectionChangedMessage (string url) { this.url = url; }
     }
 
-    public class IndexNextMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.INDEX_NEXT; } }
-    }
 
-    public class IndexPrevMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.INDEX_PREV; } }
-    }
 
     public class PanelsRebuiltMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.PANELS_REBUILT; } }
@@ -273,13 +256,7 @@ namespace Vchm.Model {
         public SearchSelectionChangedMessage (string url) { this.url = url; }
     }
 
-    public class SearchNextMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.SEARCH_NEXT; } }
-    }
 
-    public class SearchPrevMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.SEARCH_PREV; } }
-    }
 
     public class SearchOptionsChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.SEARCH_OPTIONS_CHANGED; } }
@@ -393,9 +370,6 @@ namespace Vchm.Model {
         public ViewerFindCountMessage (uint match_count) { this.match_count = match_count; }
     }
 
-    public class HistoryClearMessage : AppMessage {
-        public override AppMessageKind kind { get { return AppMessageKind.HISTORY_CLEAR; } }
-    }
 
     public class WindowStateChangedMessage : AppMessage {
         public override AppMessageKind kind { get { return AppMessageKind.WINDOW_STATE_CHANGED; } }

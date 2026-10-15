@@ -329,7 +329,7 @@ namespace Vchm.Model {
         // Resolution is case-aware but not case-exclusive: the exact
         // spelling decides (&ETH; 208 ≠ &eth; 240, &Dagger; 8225), and
         // names that miss both exact tables fall back through the
-        // capitalized-form table (review F14 — routing on the first
+        // capitalized-form table (routing on the first
         // letter's case left "&Dagger;"/"&Prime;" unresolvable).
         public static unichar entity_by_name (string raw_name) {
             if (raw_name.length == 0) return 0;

@@ -158,12 +158,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             break;
         }
 
-        case AppMessageKind.RECENT_FILE_ACTIVATED: {
-            var recent_msg = (RecentFileActivatedMessage) msg;
-            model.get_parent_dispatch () (new OpenFileMessage (recent_msg.path));
-            break;
-        }
-
         // ── Navigation ──────────────────────────────────────────────────────
         case AppMessageKind.NAVIGATE: {
             var nav_msg = (NavigateMessage) msg;
@@ -504,32 +498,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             break;
         }
 
-        case AppMessageKind.INDEX_NEXT: {
-            var t_index3 = model.current_book != null ? model.current_book.index : model.index;
-            if (t_index3.entries.size > 0) {
-                var filtered = t_index3.filtered_entries ();
-                if (filtered.size > 0) {
-                    t_index3.selected_index = (t_index3.selected_index + 1) % filtered.size;
-                    var next_url = filtered[t_index3.selected_index].url;
-                    model.get_parent_dispatch () (new NavigateMessage (next_url, null));
-                }
-            }
-            break;
-        }
-
-        case AppMessageKind.INDEX_PREV: {
-            var t_index4 = model.current_book != null ? model.current_book.index : model.index;
-            if (t_index4.entries.size > 0) {
-                var filtered = t_index4.filtered_entries ();
-                if (filtered.size > 0) {
-                    t_index4.selected_index = (t_index4.selected_index - 1 + filtered.size) % filtered.size;
-                    var prev_url = filtered[t_index4.selected_index].url;
-                    model.get_parent_dispatch () (new NavigateMessage (prev_url, null));
-                }
-            }
-            break;
-        }
-
         // ── Search ───────────────────────────────────────────────────────────
         case AppMessageKind.SEARCH_QUERY_CHANGED: {
             var search_msg = (SearchQueryChangedMessage) msg;
@@ -597,32 +565,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             }
             if (search_msg.url != null) {
                 model.get_parent_dispatch () (new NavigateMessage (search_msg.url, null));
-            }
-            break;
-        }
-
-        case AppMessageKind.SEARCH_NEXT: {
-            var s_ctx3 = model.current_book != null ? model.current_book : model.placeholder;
-            if (s_ctx3.search.results.size > 0) {
-                int next = (s_ctx3.search.selected_index + 1) % s_ctx3.search.results.size;
-                var result = s_ctx3.search.results[next];
-                if (result != null && result.url != null) {
-                    s_ctx3.search.selected_index = next;
-                    model.get_parent_dispatch () (new NavigateMessage (result.url, null));
-                }
-            }
-            break;
-        }
-
-        case AppMessageKind.SEARCH_PREV: {
-            var s_ctx4 = model.current_book != null ? model.current_book : model.placeholder;
-            if (s_ctx4.search.results.size > 0) {
-                int prev = (s_ctx4.search.selected_index - 1 + s_ctx4.search.results.size) % s_ctx4.search.results.size;
-                var result = s_ctx4.search.results[prev];
-                if (result != null && result.url != null) {
-                    s_ctx4.search.selected_index = prev;
-                    model.get_parent_dispatch () (new NavigateMessage (result.url, null));
-                }
             }
             break;
         }
@@ -812,12 +754,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             break;
         }
 
-        case AppMessageKind.HISTORY_CLEAR: {
-            var h_ctx = model.current_book != null ? model.current_book : model.placeholder;
-            h_ctx.history.clear ();
-            break;
-        }
-
         // ── Window state ─────────────────────────────────────────────────────
         case AppMessageKind.WINDOW_STATE_CHANGED: {
             var ws_msg = (WindowStateChangedMessage) msg;
@@ -890,25 +826,11 @@ case AppMessageKind.LINK_HOVERED: {
         }
 
         case AppMessageKind.TEST_REOPEN: {
-            // Test-only close: clear books like old CLOSE_FILE did so late navigates don't resurrect history
-            // (will be replaced by single-book set_active(null) once books array is removed in Phase 5)
-            foreach (var ctx in model.books) {
-                ctx.chm_file.close ();
-            }
-            model.clear_books ();
-            if (model.placeholder != null) {
-                model.placeholder.chm_file.close ();
-                model.placeholder.topics.clear ();
-                model.placeholder.index.clear ();
-                model.placeholder.search.clear ();
-                model.placeholder.viewer.current_url = "/";
-                model.placeholder.viewer.current_title = "";
-                model.placeholder.viewer.current_chm_file = "";
-                model.placeholder.history.clear ();
-                model.placeholder.history_navigation_in_progress = false;
-            }
+            // Test-only close: set_active(null) closes the active book's
+            // CHM handle, drops it and notifies the view, which recreates
+            // a blank ViewerView. The empty-book context is left intact —
+            // it is the stable fallback for every proxy getter.
             model.set_active (null);
-            model.file_open = false;
             model.status_text = _("Ready");
             break;
         }

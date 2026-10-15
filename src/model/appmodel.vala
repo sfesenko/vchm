@@ -20,7 +20,9 @@ namespace Vchm.Model {
     public class AppModel : Object {
         private BookContext? _active_ctx = null;
         private BookContext _empty_book = new BookContext ();
-        // Deprecated aliases for one-commit migration — new code uses current_book/_empty_book
+        // Empty stand-in used when no book is open. Every proxy getter and the
+        // ~40 `current_book != null ? … : …` fallbacks in update/views resolve
+        // to it, so it must stay a stable, never-replaced instance.
         public BookContext placeholder { get { return _empty_book; } }
         public BookContext current_ctx { get { return _active_ctx ?? _empty_book; } }
         public CHMFile chm_file {
@@ -51,55 +53,14 @@ namespace Vchm.Model {
         public BookmarkStore bookmarks { get; private set; }
         public PerBookStore per_books { get; private set; }
 
-        // Single-book: exactly one active context
+        // Single-book: exactly one active context.
         public BookContext? current_book {
             get { return _active_ctx; }
             set { set_active (value); }
         }
-        // Alias for migration
-        public BookContext? active_book {
-            get { return current_book; }
-            set { current_book = value; }
-        }
-
-        // Deprecated tabs/books shim — single-book has no tabs. Kept to keep old tests compiling one commit; will be removed.
-        private Gee.ArrayList<BookContext> _books_compat = new Gee.ArrayList<BookContext> ();
-        public Gee.ArrayList<BookContext> books {
-            get { return _books_compat; }
-            set { _books_compat = value; notify_property ("books"); notify_property ("tabs"); }
-        }
-        public Gee.ArrayList<BookContext> tabs {
-            get { return _books_compat; }
-        }
-        public BookContext? current_tab {
-            owned get { return _active_ctx; }
-        }
-        private int _active_tab_index = -1;
-        public int active_tab_index {
-            get { return _active_tab_index; }
-            set {
-                if (_active_tab_index == value) return;
-                _active_tab_index = value;
-                notify_property ("active-tab-index");
-                notify_property ("current-tab");
-            }
-        }
-        public void add_book (BookContext ctx) { _books_compat.add (ctx); notify_property ("books"); notify_property ("tabs"); }
-        public void insert_book (int idx, BookContext ctx) { _books_compat.insert (idx, ctx); notify_property ("books"); notify_property ("tabs"); }
-        public void remove_book_at (int idx) { _books_compat.remove_at (idx); notify_property ("books"); notify_property ("tabs"); }
-        public void clear_books () { _books_compat.clear (); notify_property ("books"); notify_property ("tabs"); }
-        public void reorder_books (int from, int to) {
-            if (from < 0 || from >= _books_compat.size || to < 0 || to > _books_compat.size) return;
-            var tmp = _books_compat[from];
-            _books_compat.remove_at (from);
-            if (to > from) to--;
-            _books_compat.insert (to, tmp);
-            notify_property ("books"); notify_property ("tabs");
-        }
 
         public bool file_open { get; set; }
         public string status_text { get; set; }
-        public string? toast_message { get; set; }
 
         public bool history_navigation_in_progress {
             get { return current_ctx.history_navigation_in_progress; }
@@ -114,7 +75,6 @@ namespace Vchm.Model {
             }
             _active_ctx = ctx;
             file_open = (ctx != null);
-            notify_property ("active-book");
             notify_property ("current-book");
             notify_property ("chm-file");
             notify_property ("topics");
@@ -123,11 +83,6 @@ namespace Vchm.Model {
             notify_property ("search");
             notify_property ("viewer");
             notify_property ("history-navigation-in-progress");
-            notify_property ("current-tab");
-        }
-
-        public void clear_active () {
-            set_active (null);
         }
 
         public static string canon_open_key (string path) {
@@ -161,14 +116,6 @@ namespace Vchm.Model {
 
             file_open = false;
             status_text = _("Ready");
-        }
-
-        public void bind_to (BookContext ctx) {
-            _active_ctx = ctx;
-        }
-
-        public AppMessage to_app_message (AppMessage msg) {
-            return msg;
         }
 
         public void show_toast (string message) {

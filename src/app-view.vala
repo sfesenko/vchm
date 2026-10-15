@@ -119,7 +119,7 @@ namespace Vchm {
             model.settings.notify["show-search"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
             model.settings.notify["show-bookmarks"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
             model.settings.notify["active-side-panel"].connect (() => { update_sidebar_visibility (model); sync_panel_actions (model); });
-            model.notify["active-book"].connect (() => {
+            model.notify["current-book"].connect (() => {
                 // Single-book: recreate viewer when active book changes (design §6)
                 // Delay to ensure held_model is set; recreate handles null (blank) case
                 recreate_viewer_for_new_book (model.current_book);
@@ -139,9 +139,8 @@ namespace Vchm {
                 update_sidebar_visibility (model);
                 sync_panel_actions (model);
             });
-            model.notify["books"].connect (() => {
-                refresh_recent_menus ();
-            });
+            // Recent menus are refreshed from OPEN_FILE_DONE (see update()),
+            // which is the only path that mutates settings.recent_files.
             // Sash position: sync UI without queue_view_update Idle
             model.settings.notify["sash-position"].connect (() => {
                 if (main_paned == null) return;
@@ -286,10 +285,11 @@ namespace Vchm {
                 maximize ();
             }
 
-            // Persist user-driven resizes/maximize. Nothing dispatched
-            // WINDOW_STATE_CHANGED before, so the handler in the update
-            // function was dead code and every session restored the
-            // first-ever size (review F4).
+            // Persist user-driven resizes/maximize. These notify handlers are the
+            // only producers of WindowStateChangedMessage /
+            // WindowMaximizedChangedMessage; without them the settings
+            // fields never leave their loaded values and every session
+            // restores the first-ever size.
             notify["default-width"].connect (() => save_geometry (model));
             notify["default-height"].connect (() => save_geometry (model));
             notify["maximized"].connect (() => {
@@ -534,7 +534,7 @@ private void setup_main_layout (AppModel model) {
             sidebar_box.append (sidebar_notebook);
             // Apply restored panel visibility here — only toggle messages
             // touched it before, so the first session after enabling a
-            // saved-off panel still showed it (review F18).
+            // saved-off panel still showed it.
             sidebar_box.visible = model.settings.show_topics ||
                                   model.settings.show_index ||
                                   model.settings.show_search ||
@@ -703,7 +703,7 @@ private void setup_main_layout (AppModel model) {
                 version = VERSION,
                 title = _("About vCHM"),
                 comments = _("A CHM file viewer"),
-                website = "***REMOVED***
+                website = "https://github.com/sfesenko/vchm",
                 website_label = _("Project website"),
                 license_type = Gtk.License.MIT_X11,
                 transient_for = this,
@@ -711,7 +711,7 @@ private void setup_main_layout (AppModel model) {
                 logo_icon_name = "help-contents"
             };
             // GTK4 windows are only hidden on close: without an explicit
-            // destroy every invocation leaked the dialog (review F21).
+            // destroy every invocation leaked the dialog.
             about.close_request.connect (() => {
                 about.destroy ();
                 return false;
@@ -901,7 +901,7 @@ private void setup_main_layout (AppModel model) {
 
                     if (done_msg.ctx == null) break;
 
-                    // Single-book: current_book already set by updateModel; notify["active-book"] recreated viewer.
+                    // Single-book: current_book already set by updateModel; notify["current-book"] recreated viewer.
                     refresh_recent_menus ();
                     break;
                 }
@@ -968,7 +968,7 @@ case AppMessageKind.PRESENT_WINDOW: {
                 }
 
                 case AppMessageKind.TEST_REOPEN: {
-                    // Model already cleared via set_active(null); view blank is handled via notify["active-book"] -> recreate_viewer_for_new_book(null)
+                    // Model already cleared via set_active(null); view blank is handled via notify["current-book"] -> recreate_viewer_for_new_book(null)
                     break;
                 }
 

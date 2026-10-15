@@ -4,7 +4,7 @@ test_deps = [
 ]
 
 # Binary parser fixtures. Generated at build time from tools/mkfixtures.py
-# so a fresh clone works without hand-generated blobs (review F25); falls
+# so a fresh clone works without hand-generated blobs; falls
 # back to committed-in-workdir copies when python3 is unavailable.
 # Test book override: -Dtest_book=/path or env VCHM_TEST_BOOK=/path (A6).
 python3 = find_program('python3', required: false)
@@ -32,7 +32,7 @@ else
 endif
 
 # Test env: schema dir keeps GSettings happy, memory backend keeps the
-# developer's real dconf untouched (review F15).
+# developer's real dconf untouched.
 test_env = [
   'GSETTINGS_SCHEMA_DIR=/nonexistent-vchm-tests',
   'GSETTINGS_BACKEND=memory',

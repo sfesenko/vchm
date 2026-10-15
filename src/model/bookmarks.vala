@@ -21,7 +21,7 @@ namespace Vchm.Model {
     // Bookmarks grouped per archive. Serialized into a GSettings string
     // array as "archive\x1furl\x1ftitle" rows. Fields are escaped, so
     // titles/URLs containing the unit separator (or backslashes) survive
-    // a round-trip instead of being silently dropped on load (review F13).
+    // a round-trip instead of being silently dropped on load.
     public class BookmarkStore : Object {
         private const string SEP = "\x1f";
         private const string ESC = "\\";

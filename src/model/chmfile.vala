@@ -54,7 +54,7 @@ namespace Vchm.Model {
     // Name of TOC entry `index`: #STRINGS offset stored in #TOPICS entry +4.
     public string? btoc_item_name (uint8[] topics, uint8[] strings, uint32 index, string enc) {
         // Offsets come from hostile data: compute in 64-bit so a crafted
-        // index wrapping mod 2^32 cannot pass the bounds check (review F22).
+        // index wrapping mod 2^32 cannot pass the bounds check.
         uint64 tbase = (uint64) index * 16;
         if (tbase + 12 > (uint64) topics.length) return null;
         var off = UINT32_FROM_ARRAY (topics, (int) tbase + 4);
@@ -226,7 +226,7 @@ namespace Vchm.Model {
         // The URI scheme handler resolves "chm://<escaped-path>/..." against
         // this table, so every tab serves from its own archive. Keyed by
         // FULL PATH: two books may share a basename (/en/help.chm vs
-        // /uk/help.chm) and must not collide (review F5).
+        // /uk/help.chm) and must not collide.
         // Static HashMap is accessed from both the main thread (scheme
         // handler) and worker threads (OPEN_FILE load), so it needs a
         // dedicated mutex (per-instance _api_mutex is not enough).
@@ -1285,7 +1285,7 @@ namespace Vchm.Model {
         var entry = new uint8[TOPICS_ENTRY_LEN];
         var combuf = new uint8[COMBUF_LEN];
         // De-dup set: scanning `results` per document is quadratic on
-        // hit-heavy words (review F23).
+        // hit-heavy words.
         var seen_urls = new Gee.HashSet<string> ();
 
         for (uint64 i = 0; i < wlc_count; ++i) {
@@ -1776,9 +1776,9 @@ public bool search (string query, bool whole_words, bool titles_only,
     // Brute force — potentially minutes long. Snapshot the URL list under
     // the lock, then fetch each page in its own short locked section:
     // the chm:// scheme handler runs on the main loop, so holding the
-    // mutex for the whole scan froze link clicks, lazy images and tab
-    // closes until it finished (review F2). After close() mid-scan,
-    // get_content fails cleanly and the loop drains without hits.
+    // mutex for the whole scan froze link clicks and lazy images until it
+    // finished. After close() mid-scan, get_content fails cleanly and the
+    // loop drains without hits.
     Gee.HashMap<string, string> titles = new Gee.HashMap<string, string> ();
     var urls = new Gee.ArrayList<string> ();
     var seen = new Gee.HashSet<string> ();
@@ -1935,7 +1935,7 @@ static int count_matches (string haystack_down, string needle_down, bool whole_w
     // Whole-word mode: map match offsets to character boundaries. The
     // offset table is built once per haystack — the previous version
     // allocated the whole prefix substring PER MATCH, which is
-    // quadratic on hit-heavy pages (review F23).
+    // quadratic on hit-heavy pages.
     int nchars = haystack_down.char_count ();
     if (nchars == 0) return 0;
     var starts = new int[nchars];
