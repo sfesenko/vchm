@@ -395,6 +395,12 @@ namespace Vchm.View {
         // Serve resources out of the archive. HTML is transcoded to UTF-8
         // using the per-file encoding detected from #SYSTEM/#WINDOWS.
         private void on_chm_uri_request (WebKit.URISchemeRequest request) {
+            on_chm_uri_request_async.begin (request);
+        }
+
+        // Async: object reads await read_async (per-interval main-loop
+        // yields) instead of blocking the UI thread on decompression.
+        private async void on_chm_uri_request_async (WebKit.URISchemeRequest request) {
             // "chm://<escaped-archive-path>/path" — resolve the owning archive.
             string uri = request.get_uri ();
             const string prefix = "chm://";
@@ -416,7 +422,7 @@ namespace Vchm.View {
                 return;
             }
 
-            var bytes = book.get_bytes (path);
+            var bytes = yield book.get_bytes_async (path);
             if (bytes == null) {
                 finish_empty (request);
                 return;

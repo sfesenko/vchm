@@ -6,14 +6,15 @@ test_deps = [
 # Binary parser fixtures. Generated at build time from tools/mkfixtures.py
 # so a fresh clone works without hand-generated blobs; falls
 # back to committed-in-workdir copies when python3 is unavailable.
-# Test book override: -Dtest_book=/path or env VCHM_TEST_BOOK=/path (A6).
 python3 = find_program('python3', required: false)
 if python3.found()
   fixture_names = [
     'basic.chm', 'koi8u.chm', 'big.chm', 'deep.chm', 'malformed.chm',
     'fts.chm', 'btree.chm', 'score.chm', 'chi.chm', 'chi.chi', 'win.chm',
     'flat.chm', 'fts_ff.chm', 'fts_fs.chm', 'fts_big.chm', 'cyc.chm',
-    'nonul.chm',
+    'nonul.chm', 'compressed.chm',
+    'dir_cword_overflow.chm', 'dir_trunc.chm', 'dir_badfree.chm',
+    'dir_badoff.chm', 'dir_selfcycle.chm',
     'book_cp1251.chm', 'book_koi8u.chm',
   ]
   mkfixtures = custom_target('chm-fixtures',
@@ -38,27 +39,7 @@ test_env = [
   'GSETTINGS_BACKEND=memory',
 ]
 
-# Optional smoke test against a real book when the developer provides one.
-real_book = get_option('test_book')
-if real_book == ''
-  # Env fallback for CI / ad-hoc runs without reconfiguring (A6)
-  real_book = run_command('sh', '-c', 'echo -n "$VCHM_TEST_BOOK"', check: false).stdout().strip()
-endif
-have_real_book = real_book != ''
-
-test_chmlib = executable('test_chmlib',
-  'test_chmlib.vala',
-  dependencies: [test_deps, lib_core_dep],
-  link_with: chmlib_lib,
-)
-if have_real_book
-  test('test chmlib', test_chmlib, args: [real_book], env: test_env)
-else
-  test('test chmlib', test_chmlib, args: [
-    join_paths(fixtures_dir, 'basic.chm'),
-  ], env: test_env, depends: mkfixtures)
-endif
-
+# (Render/reopen shell tests take their books as positional args.)
 test_elmish = executable('test_elmish',
   'test_elmish.vala',
   dependencies: [test_deps, lib_core_dep],
@@ -77,7 +58,6 @@ test('test open serial', test_serial, env: test_env)
 test_parsers = executable('test_parsers',
   'test_parsers.vala',
   dependencies: [test_deps, lib_core_dep],
-  link_with: chmlib_lib,
 )
 test('test parsers', test_parsers,
   args: [fixtures_dir],
@@ -88,7 +68,6 @@ test('test parsers', test_parsers,
 test_reopen = executable('test_reopen',
   'test_reopen.vala',
   dependencies: [test_deps, lib_core_dep],
-  link_with: chmlib_lib,
 )
 test('test reopen', test_reopen,
   env: test_env + ['FIXTURES_DIR=' + fixtures_dir],
@@ -103,3 +82,25 @@ test('test reopen', test_reopen,
 # The display-backed render smoke (test render smoke) is defined in the
 # root meson.build — it runs the vchm binary under Xvfb, so it needs
 # app_sources and the executable target, which are root-scope only.
+
+test_itsf = executable('test_itsf',
+  'test_itsf.vala',
+  dependencies: [test_deps, lib_core_dep],
+)
+test('test itsf', test_itsf,
+  env: test_env + ['FIXTURES_DIR=' + fixtures_dir,
+                   # Vector files (tests/itsfdata/*.lzx) live in the source
+                   # tree; the binary locates them via MESON_SOURCE_ROOT or
+                   # by walking up from its own path, which only works when
+                   # the build dir sits inside the source tree. Pass the
+                   # source root explicitly so out-of-tree builds (Step 4:
+                   # /tmp/opencode/vchm-cut) resolve vectors too.
+                   'MESON_SOURCE_ROOT=' + meson.project_source_root ()],
+  depends: mkfixtures,
+  # The corpus parity case decodes every object of every local book twice
+  # (sync + async); generous budget for slow machines with a big corpus.
+  timeout: 600,
+)
+
+# (The differential test vs the deleted C reference lived here; the
+# async sync/async parity case in test_itsf.vala now guards the decoder.)

@@ -5,7 +5,6 @@
 // InfoFromSystem TLV records, 16-byte #TOPICS
 // entries, #URLTBL indirection at +8 and #URLSTR strings at +8.
 
-using ChmLib;
 using GLib;
 using Gee;
 
@@ -165,12 +164,12 @@ namespace Vchm.Model {
         }
     }
 
-    // CHM File wrapper using chmlib
+    // CHM File wrapper over the Itsf decoder
     public class CHMFile : Object {
         private const long MAX_UNIT_BYTES = 256 * 1024 * 1024; // sanity cap
 
-        private ChmLib.File* _file;
-        private ChmLib.File* _chi_file;   // optional .chi companion for /# units
+        private Itsf.Archive? _archive;
+        private Itsf.Archive? _chi_archive;   // optional .chi companion for /# units
         private string _filename;
         private string _title;
         private string _home;
@@ -184,14 +183,14 @@ namespace Vchm.Model {
         private string _raw_home;
         private bool _encoding_hinted = false;
 
-        // Serializes chmlib handle access across threads (URI-scheme
+        // Serializes archive access across threads (URI-scheme
         // workers, search/navigation Cmds) against close(). RecMutex:
         // entry points nest (load→close, detect_encoding→get_bytes…).
         private GLib.RecMutex _api_mutex = GLib.RecMutex ();
 
         public CHMFile () {
-            _file = null;
-            _chi_file = null;
+            _archive = null;
+            _chi_archive = null;
             _filename = "";
             _title = "";
             _home = "/";
@@ -210,7 +209,7 @@ namespace Vchm.Model {
         public bool is_open () {
             _api_mutex.lock ();
             try {
-                return _file != null;
+                return _archive != null;
             } finally {
                 _api_mutex.unlock ();
             }
@@ -218,8 +217,54 @@ namespace Vchm.Model {
 
         // Metadata handle: a .chi companion when present, else the archive
         // itself (_chmChiFile semantics).
-        private ChmLib.File* meta_file () {
-            return _chi_file != null ? _chi_file : _file;
+        private Itsf.Archive? meta_file () {
+            return _chi_archive != null ? _chi_archive : _archive;
+        }
+
+        // Drive the async Archive.open to completion from sync call sites.
+        // Throws the underlying Itsf.Error; callers map it to their own
+        // failure shape (load() -> false + stderr, readers -> miss).
+        private static Itsf.Archive open_archive_blocking (string path) throws Itsf.Error {
+            Itsf.Archive? result = null;
+            Error? open_err = null;
+            var loop = new GLib.MainLoop ();
+            Itsf.Archive.open.begin (GLib.File.new_for_path (path), (o, r) => {
+                try {
+                    result = Itsf.Archive.open.end (r);
+                } catch (Error e) {
+                    open_err = e;
+                }
+                loop.quit ();
+            });
+            loop.run ();
+            if (open_err != null) {
+                if (open_err is Itsf.Error)
+                    throw (Itsf.Error) open_err;
+                throw new Itsf.Error.OPEN_FAILED ("cannot open %s: %s".printf (path, open_err.message));
+            }
+            if (result == null)
+                throw new Itsf.Error.OPEN_FAILED ("cannot open %s".printf (path));
+            return result;
+        }
+
+        private static bool try_open_archive (string path, out Itsf.Archive? arc) {
+            arc = null;
+            try {
+                arc = open_archive_blocking (path);
+                return true;
+            } catch (Error e) {
+                return false;
+            }
+        }
+
+        // Owned copy of an archive entry's bytes for uint8[] consumers.
+        private static uint8[] bytes_to_array (GLib.Bytes b) {
+            if (b.get_size () == 0)
+                return new uint8[0];
+            unowned uint8[] data = b.get_data ();
+            var arr = new uint8[(int) b.get_size ()];
+            GLib.Memory.copy (arr, data, (size_t) b.get_size ());
+            return arr;
         }
 
         // ── Open-book registry (multi-book serving) ─────────────────────
@@ -313,7 +358,7 @@ namespace Vchm.Model {
         public void override_encoding (string encoding) {
             _api_mutex.lock ();
             try {
-                if (_file == null) return;
+                if (_archive == null) return;
                 if (encoding == "auto") {
                     _encoding_hinted = false;
                     parse_system_info ();          // re-reads LCID/font hints
@@ -342,21 +387,24 @@ namespace Vchm.Model {
                     return false;
                 }
 
-                _file = chm_open (filename);
-
-                if (_file == null) {
+                Itsf.Archive arc;
+                try {
+                    arc = open_archive_blocking (filename);
+                } catch (Error e) {
                     stderr.printf ("Failed to open CHM file: %s\n", filename);
                     return false;
                 }
+                _archive = (owned) arc;
 
                 // .chi companion: internal /#* units live there instead.
                 var stem = filename.has_suffix (".chm")
                     ? filename.substring (0, filename.length - 4)
                     : filename;
-                _chi_file = chm_open (stem + ".chi");
-                if (_chi_file == null) {
-                    _chi_file = chm_open (stem + ".CHI");
+                Itsf.Archive? chi = null;
+                if (!try_open_archive (stem + ".chi", out chi)) {
+                    try_open_archive (stem + ".CHI", out chi);
                 }
+                _chi_archive = (owned) chi;
 
                 _filename = GLib.File.new_for_path (filename).get_path () ?? filename;
                 register_self ();   // keyed by canonical full path — AFTER _filename is set
@@ -385,15 +433,13 @@ namespace Vchm.Model {
             _api_mutex.lock ();
             try {
                 unregister_self ();
-                if (_chi_file != null) {
-                    var tmp = _chi_file;
-                    _chi_file = null;
-                    chm_close (tmp);
+                if (_chi_archive != null) {
+                    _chi_archive.close ();
+                    _chi_archive = null;
                 }
-                if (_file != null) {
-                    var tmp = _file;
-                    _file = null;
-                    chm_close (tmp);
+                if (_archive != null) {
+                    _archive.close ();
+                    _archive = null;
                     _filename = "";
                     _first_topic_url = null;
                 }
@@ -407,16 +453,22 @@ namespace Vchm.Model {
         // version header. Types: 0=hhc 1=hhk 2=home 3=title 4=LCID 6=compiled
         // name 16=default font (InfoFromSystem).
         private void parse_system_info () {
-            if (_file == null) return;
+            if (_archive == null) return;
+            var mf = meta_file ();
+            if (mf == null) return;
 
-            ChmLib.UnitInfoStruct ui = ChmLib.UnitInfoStruct ();
-            if (chm_resolve_object (meta_file (), "/#SYSTEM", out ui) != ChmLib.RESOLVE_SUCCESS) return;
-            if (ui.length < 5 || ui.length > MAX_UNIT_BYTES) return;
+            if (!mf.contains ("/#SYSTEM")) return;
+            uint64 total = mf.uncompressed_size ("/#SYSTEM");
+            if (total < 5 || total > (uint64) MAX_UNIT_BYTES) return;
 
-            var buf = new uint8[(int) ui.length]; // zero-initialised
-
-            // Skip the 4-byte version header.
-            long size = chm_retrieve_object (meta_file (), &ui, buf, 4, (long) ui.length - 4);
+            uint8[] buf;
+            try {
+                // Skip the 4-byte version header.
+                buf = bytes_to_array (mf.read_range ("/#SYSTEM", 4, total - 4));
+            } catch (Error e) {
+                return;
+            }
+            long size = (long) buf.length;
             if (size <= 4) return;
 
             int index = 0;
@@ -509,14 +561,21 @@ namespace Vchm.Model {
         // into each entry: title @0x14, hhc @0x60, hhk @0x64, home @0x68 —
         // all absolute offsets into #STRINGS. Port of InfoFromWindows().
         private void parse_windows_info () {
-            if (_file == null) return;
+            if (_archive == null) return;
+            var mf = meta_file ();
+            if (mf == null) return;
 
-            ChmLib.UnitInfoStruct wui = ChmLib.UnitInfoStruct ();
-            if (chm_resolve_object (meta_file (), "/#WINDOWS", out wui) != ChmLib.RESOLVE_SUCCESS) return;
-            if (wui.length < 8 || wui.length > MAX_UNIT_BYTES) return;
+            if (!mf.contains ("/#WINDOWS")) return;
+            uint64 wlen = mf.uncompressed_size ("/#WINDOWS");
+            if (wlen < 8 || wlen > (uint64) MAX_UNIT_BYTES) return;
 
-            var hdr = new uint8[8];
-            if (chm_retrieve_object (meta_file (), &wui, hdr, 0, 8) != 8) return;
+            uint8[] hdr;
+            try {
+                hdr = bytes_to_array (mf.read_range ("/#WINDOWS", 0, 8));
+            } catch (Error e) {
+                return;
+            }
+            if (hdr.length != 8) return;
 
             uint32 entries = UINT32_FROM_ARRAY (hdr, 0);
             uint32 entry_size = UINT32_FROM_ARRAY (hdr, 4);
@@ -525,16 +584,24 @@ namespace Vchm.Model {
             if (entries > 1024) entries = 1024;
 
             uint64 total = (uint64) entries * entry_size;
-            if (total > wui.length) return;
+            if (total > wlen) return;
 
-            var raw = new uint8[(int) total];
-            if (chm_retrieve_object (meta_file (), &wui, raw, 8, (long) total) != (long) total) return;
+            uint8[] raw;
+            try {
+                raw = bytes_to_array (mf.read_range ("/#WINDOWS", 8, total));
+            } catch (Error e) {
+                return;
+            }
+            if ((uint64) raw.length != total) return;
 
-            ChmLib.UnitInfoStruct sui = ChmLib.UnitInfoStruct ();
-            if (chm_resolve_object (meta_file (), "/#STRINGS", out sui) != ChmLib.RESOLVE_SUCCESS) return;
+            if (!mf.contains ("/#STRINGS")) return;
 
-            var strings = new uint8[(int) sui.length];
-            if (chm_retrieve_object (meta_file (), &sui, strings, 0, (long) sui.length) != (long) sui.length) return;
+            uint8[] strings;
+            try {
+                strings = bytes_to_array (mf.read ("/#STRINGS"));
+            } catch (Error e) {
+                return;
+            }
 
             for (uint32 i = 0; i < entries; i++) {
                 int base_i = (int) (i * entry_size);
@@ -758,41 +825,28 @@ namespace Vchm.Model {
 
         // ── Archive enumeration ─────────────────────────────────────────
 
-        private static int enum_cb (ChmLib.File* h, ChmLib.UnitInfoStruct* ui, void* data) {
-            var sink = (Gee.ArrayList<string>?) data;
-            if (sink == null || ui == null) return ChmLib.ENUMERATOR_CONTINUE;
-
-            var sb = new StringBuilder ();
-            for (int k = 0; k < 513; k++) {
-                uint8 ch = ui->path[k];
-                if (ch == 0) break;
-                sb.append_c ((char) ch);
-            }
-            var path = sb.str;
-            if (path.length < 2) return ChmLib.ENUMERATOR_CONTINUE;
-
-            // Skip internal streams ("/#…"), virtual storage ("::…") and
-            // directory markers.
-            if (path.has_prefix ("/#") || path.has_prefix ("::") || path.has_suffix ("/")) {
-                return ChmLib.ENUMERATOR_CONTINUE;
-            }
-            if (!path.has_prefix ("/")) {
-                path = "/" + path;
-            }
-
-            sink.add (path);
-            return ChmLib.ENUMERATOR_CONTINUE;
-        }
-
         public Gee.ArrayList<string> enumerate_files () {
             _api_mutex.lock ();
             try {
                 var list = new Gee.ArrayList<string> ();
-                if (_file == null) return list;
+                if (_archive == null) return list;
 
-                // ALL covers category+type bits; filtering happens in the callback
-                // because NORMAL/SPECIAL/META are category bits over FILES/DIRS.
-                chm_enumerate (_file, ChmLib.ENUMERATE_ALL, enum_cb, (void*) list);
+                foreach (var path in _archive.list ()) {
+                    if (path.length < 2) continue;
+
+                    // Skip internal streams ("/#…"), virtual storage ("::…") and
+                    // directory markers. The library already excludes them;
+                    // this stays as defence.
+                    if (path.has_prefix ("/#") || path.has_prefix ("::") || path.has_suffix ("/")) {
+                        continue;
+                    }
+                    string p = path;
+                    if (!p.has_prefix ("/")) {
+                        p = "/" + p;
+                    }
+
+                    list.add (p);
+                }
                 return list;
             } finally {
                 _api_mutex.unlock ();
@@ -865,8 +919,8 @@ namespace Vchm.Model {
             }
         }
 
-        // Decode a retrieved unit to UTF-8 text. Validates properly instead
-        // of relying on casts (review §4.9).
+        // Decode a retrieved unit to UTF-8 text, validating instead of
+        // relying on casts.
         private string decode_bytes (uint8[] buffer, long length) {
             if (length <= 0) return "";
 
@@ -886,8 +940,8 @@ namespace Vchm.Model {
 
         // ── Content access ──────────────────────────────────────────────
 
-        // Normalize a URL/path for chmlib lookup. CHMLIB stores entries with
-        // a leading '/', so ensure it is present (review §4.1).
+        // Normalize a URL/path for archive lookup. The archive stores entries with
+        // a leading '/', so ensure it is present.
         // Anchors are stripped — except "/#NAME" which is an internal
         // metadata file (#SYSTEM, #TOPICS…), not a fragment.
         private string normalize_path (string path) {
@@ -914,21 +968,25 @@ namespace Vchm.Model {
         public CHMContent get_content (string path) {
             _api_mutex.lock ();
             try {
-                if (_file == null) {
+                if (_archive == null) {
                     return CHMContent.error_result ("No CHM file loaded");
                 }
 
                 string norm_path = normalize_path (path);
 
-                ChmLib.UnitInfoStruct ui = ChmLib.UnitInfoStruct ();
-                if (chm_resolve_object (_file, norm_path, out ui) == ChmLib.RESOLVE_SUCCESS &&
-                    ui.length <= MAX_UNIT_BYTES) {
-                    var buffer = new uint8[(int) ui.length + 1]; // +1 keeps the cast below NUL-terminated
-                    long read = chm_retrieve_object (_file, &ui, buffer, 0, (long) ui.length);
-                    if (read > 0) {
-                        buffer[(int) read] = 0;
-                        string content = decode_bytes (buffer, read);
-                        return CHMContent.success_result (content, mime_for_path (norm_path), norm_path);
+                if (_archive.contains (norm_path) &&
+                    _archive.uncompressed_size (norm_path) <= (uint64) MAX_UNIT_BYTES) {
+                    try {
+                        var bytes = _archive.read (norm_path);
+                        if (bytes.get_size () > 0) {
+                            unowned uint8[] data = bytes.get_data ();
+                            var buffer = new uint8[bytes.get_size () + 1]; // +1 keeps the cast below NUL-terminated
+                            GLib.Memory.copy (buffer, data, (size_t) bytes.get_size ());
+                            buffer[bytes.get_size ()] = 0;
+                            string content = decode_bytes (buffer, (long) bytes.get_size ());
+                            return CHMContent.success_result (content, mime_for_path (norm_path), norm_path);
+                        }
+                    } catch (Error e) {
                     }
                 }
 
@@ -941,17 +999,18 @@ namespace Vchm.Model {
         public GLib.Bytes? get_bytes (string path) {
             _api_mutex.lock ();
             try {
-                if (_file == null) return null;
+                if (_archive == null) return null;
 
                 string norm_path = normalize_path (path);
 
-                ChmLib.UnitInfoStruct ui = ChmLib.UnitInfoStruct ();
-                if (chm_resolve_object (_file, norm_path, out ui) == ChmLib.RESOLVE_SUCCESS &&
-                    ui.length <= MAX_UNIT_BYTES) {
-                    var buffer = new uint8[(int) ui.length];
-                    long read = chm_retrieve_object (_file, &ui, buffer, 0, (long) ui.length);
-                    if (read > 0) {
-                        return new GLib.Bytes (buffer[0:(int) read]);
+                if (_archive.contains (norm_path) &&
+                    _archive.uncompressed_size (norm_path) <= (uint64) MAX_UNIT_BYTES) {
+                    try {
+                        var bytes = _archive.read (norm_path);
+                        if (bytes.get_size () > 0) {
+                            return bytes;
+                        }
+                    } catch (Error e) {
                     }
                 }
 
@@ -961,14 +1020,44 @@ namespace Vchm.Model {
             }
         }
 
+        // Async twin of get_bytes for the chm:// scheme handler: yields per
+        // reset interval instead of blocking. Holds _api_mutex across the
+        // await — the resume runs on the lock-owner thread, so workers just
+        // wait. Misses map to null like the sync path.
+        public async GLib.Bytes? get_bytes_async (string path) {
+            _api_mutex.lock ();
+            Itsf.Archive? arc = _archive;
+            string norm_path = normalize_path (path);
+            bool ok = arc != null && arc.contains (norm_path) &&
+                arc.uncompressed_size (norm_path) <= (uint64) MAX_UNIT_BYTES;
+            if (!ok) {
+                _api_mutex.unlock ();
+                return null;
+            }
+            assert (arc != null);
+            var bytes = yield read_entry_quietly (arc, norm_path);
+            _api_mutex.unlock ();
+            if (bytes != null && bytes.get_size () > 0)
+                return bytes;
+            return null;
+        }
+
+        private async GLib.Bytes? read_entry_quietly (Itsf.Archive arc,
+                string path) {
+            try {
+                return yield arc.read_async (path);
+            } catch (Error e) {
+                return null;
+            }
+        }
+
         public bool has_object (string path) {
             _api_mutex.lock ();
             try {
-                if (_file == null) return false;
+                if (_archive == null) return false;
 
                 string norm_path = normalize_path (path);
-                ChmLib.UnitInfoStruct ui = ChmLib.UnitInfoStruct ();
-                return chm_resolve_object (_file, norm_path, out ui) == ChmLib.RESOLVE_SUCCESS;
+                return _archive.contains (norm_path);
             } finally {
                 _api_mutex.unlock ();
             }
@@ -989,44 +1078,54 @@ namespace Vchm.Model {
 
             _api_mutex.lock ();
             try {
-                if (_file == null) return false;
-
-                ChmLib.UnitInfoStruct ts_ui = ChmLib.UnitInfoStruct ();
-                ChmLib.UnitInfoStruct st_ui = ChmLib.UnitInfoStruct ();
-                ChmLib.UnitInfoStruct ut_ui = ChmLib.UnitInfoStruct ();
-                ChmLib.UnitInfoStruct us_ui = ChmLib.UnitInfoStruct ();
-                ChmLib.UnitInfoStruct ti_ui = ChmLib.UnitInfoStruct ();
+                if (_archive == null) return false;
 
                 var mf = meta_file ();
-                bool has_ti = chm_resolve_object (mf, "/#TOCIDX", out ti_ui) == ChmLib.RESOLVE_SUCCESS;
-                if (chm_resolve_object (mf, "/#TOPICS", out ts_ui) != ChmLib.RESOLVE_SUCCESS ||
-                    chm_resolve_object (mf, "/#STRINGS", out st_ui) != ChmLib.RESOLVE_SUCCESS ||
-                    chm_resolve_object (mf, "/#URLTBL", out ut_ui) != ChmLib.RESOLVE_SUCCESS ||
-                    chm_resolve_object (mf, "/#URLSTR", out us_ui) != ChmLib.RESOLVE_SUCCESS) {
+                if (mf == null) return false;
+                if (!mf.contains ("/#TOPICS") ||
+                    !mf.contains ("/#STRINGS") ||
+                    !mf.contains ("/#URLTBL") ||
+                    !mf.contains ("/#URLSTR")) {
+                    return false;
+                }
+                uint64 ts_len = mf.uncompressed_size ("/#TOPICS");
+                uint64 st_len = mf.uncompressed_size ("/#STRINGS");
+                uint64 ut_len = mf.uncompressed_size ("/#URLTBL");
+                uint64 us_len = mf.uncompressed_size ("/#URLSTR");
+
+                if (ts_len > (uint64) MAX_UNIT_BYTES || st_len > (uint64) MAX_UNIT_BYTES ||
+                    ut_len > (uint64) MAX_UNIT_BYTES || us_len > (uint64) MAX_UNIT_BYTES) {
                     return false;
                 }
 
-                if (ts_ui.length > MAX_UNIT_BYTES || st_ui.length > MAX_UNIT_BYTES ||
-                    ut_ui.length > MAX_UNIT_BYTES || us_ui.length > MAX_UNIT_BYTES) {
+                try {
+                    var ts_b = mf.read ("/#TOPICS");
+                    var st_b = mf.read ("/#STRINGS");
+                    var ut_b = mf.read ("/#URLTBL");
+                    var us_b = mf.read ("/#URLSTR");
+                    if (ts_b.get_size () != ts_len || st_b.get_size () != st_len ||
+                        ut_b.get_size () != ut_len || us_b.get_size () != us_len) {
+                        return false;
+                    }
+                    topics = bytes_to_array (ts_b);
+                    strings = bytes_to_array (st_b);
+                    urltbl = bytes_to_array (ut_b);
+                    urlstr = bytes_to_array (us_b);
+                } catch (Error e) {
                     return false;
                 }
 
-                topics = new uint8[(int) ts_ui.length];
-                strings = new uint8[(int) st_ui.length];
-                urltbl = new uint8[(int) ut_ui.length];
-                urlstr = new uint8[(int) us_ui.length];
-
-                if (chm_retrieve_object (mf, &ts_ui, topics, 0, (long) ts_ui.length) != (long) ts_ui.length ||
-                    chm_retrieve_object (mf, &st_ui, strings, 0, (long) st_ui.length) != (long) st_ui.length ||
-                    chm_retrieve_object (mf, &ut_ui, urltbl, 0, (long) ut_ui.length) != (long) ut_ui.length ||
-                    chm_retrieve_object (mf, &us_ui, urlstr, 0, (long) us_ui.length) != (long) us_ui.length) {
-                    return false;
-                }
-
-                if (has_ti && ti_ui.length >= 4 && ti_ui.length <= MAX_UNIT_BYTES) {
-                    topidx = new uint8[(int) ti_ui.length];
-                    if (chm_retrieve_object (mf, &ti_ui, topidx, 0, (long) ti_ui.length) != (long) ti_ui.length) {
-                        topidx = null;
+                if (mf.contains ("/#TOCIDX")) {
+                    uint64 ti_len = mf.uncompressed_size ("/#TOCIDX");
+                    if (ti_len >= 4 && ti_len <= (uint64) MAX_UNIT_BYTES) {
+                        try {
+                            var ti_b = mf.read ("/#TOCIDX");
+                            if (ti_b.get_size () == ti_len) {
+                                topidx = bytes_to_array (ti_b);
+                            }
+                        } catch (Error e) {
+                            topidx = null;
+                        }
                     }
                 }
 
@@ -1053,7 +1152,7 @@ namespace Vchm.Model {
             model = null;
             _api_mutex.lock ();
             try {
-                if (_file == null) return false;
+                if (_archive == null) return false;
                 uint8[] t, s, b, r;
                 uint8[]? ti;
                 return get_topics_data (out t, out s, out b, out r, out ti);
@@ -1210,21 +1309,25 @@ namespace Vchm.Model {
     // (cpp:798). Returns 0 when not found.
     private uint32 get_leaf_node_offset (string text, uint32 initial_offset,
                                          uint32 buf_size, uint16 tree_depth,
-                                         ChmLib.File* file, ChmLib.UnitInfoStruct* ui,
+                                         Itsf.Archive f_main,
                                          string enc) {
         uint32 test_offset = 0;
         string word = "";
 
         if (buf_size == 0) return 0;
 
-        var buffer = new uint8[buf_size];
-
         while (--tree_depth > 0) {
             if (initial_offset == test_offset) return 0;
 
             test_offset = initial_offset;
-            if (chm_retrieve_object (file, ui, buffer, initial_offset, (long) buf_size) == 0)
+            uint8[] buffer;
+            try {
+                var b = f_main.read_range ("/$FIftiMain", initial_offset, buf_size);
+                if (b.get_size () != buf_size) return 0;
+                buffer = bytes_to_array (b);
+            } catch (Error e) {
                 return 0;
+            }
 
             uint16 free_space = UINT16_FROM_ARRAY (buffer, 0);
             uint32 usable = free_space < buf_size ? buf_size - free_space : 0;
@@ -1257,17 +1360,14 @@ namespace Vchm.Model {
     // resolve topic title + URL and add to results (cpp:854).
     private bool process_wlc (uint64 wlc_count, uint64 wlc_size, uint32 wlc_offset,
                               FtsParams p,
-                              ChmLib.File* f_main, ChmLib.UnitInfoStruct* ui_main,
-                              ChmLib.File* f_topics, ChmLib.UnitInfoStruct* ui_topics,
-                              ChmLib.File* f_strings, ChmLib.UnitInfoStruct* ui_strings,
-                              ChmLib.File* f_urltbl, ChmLib.UnitInfoStruct* ui_urltbl,
-                              ChmLib.File* f_urlstr, ChmLib.UnitInfoStruct* ui_urlstr,
+                              Itsf.Archive f_main, Itsf.Archive f_meta,
                               Gee.ArrayList<SearchResult> results) {
         const int TOPICS_ENTRY_LEN = 16;
         const int COMBUF_LEN = 1024;
 
+        uint64 main_len = f_main.uncompressed_size ("/$FIftiMain");
         if (wlc_count > 1000000 || wlc_size == uint64.MAX ||
-            wlc_size > (uint64) ui_main->length ||
+            wlc_size > main_len ||
             wlc_size > (uint64) MAX_UNIT_BYTES) {
             return false;
         }
@@ -1277,13 +1377,15 @@ namespace Vchm.Model {
         int off = 0;
         int length;
 
-        var buffer = new uint8[wlc_size];
-        if (chm_retrieve_object (f_main, ui_main, buffer, (ulong) wlc_offset, (long) wlc_size) != (long) wlc_size) {
+        uint8[] buffer;
+        try {
+            var wb = f_main.read_range ("/$FIftiMain", wlc_offset, wlc_size);
+            if ((uint64) wb.get_size () != wlc_size) return false;
+            buffer = bytes_to_array (wb);
+        } catch (Error e) {
             return false;
         }
 
-        var entry = new uint8[TOPICS_ENTRY_LEN];
-        var combuf = new uint8[COMBUF_LEN];
         // De-dup set: scanning `results` per document is quadratic on
         // hit-heavy words.
         var seen_urls = new Gee.HashSet<string> ();
@@ -1297,34 +1399,59 @@ namespace Vchm.Model {
             uint64 step = sr_int_at (buffer, ref off, ref bit, p.doc_index_s, p.doc_index_r, out length);
             if (step == uint64.MAX) break;
             index += step;
-            if (off >= wlc_size) break;
-            if (chm_retrieve_object (f_topics, ui_topics, entry, (ulong)(index * 16), TOPICS_ENTRY_LEN) != TOPICS_ENTRY_LEN) {
+            if ((uint64) off >= wlc_size) break;
+            if (index > uint64.MAX / 16) return false;
+            uint8[] entry;
+            try {
+                var eb = f_meta.read_range ("/#TOPICS", index * 16, TOPICS_ENTRY_LEN);
+                if (eb.get_size () != TOPICS_ENTRY_LEN) return false;
+                entry = bytes_to_array (eb);
+            } catch (Error e) {
                 return false;
             }
 
             uint32 stroff = UINT32_FROM_ARRAY (entry, 4);
             string topic;
-            long got = chm_retrieve_object (f_strings, ui_strings, combuf, stroff, COMBUF_LEN - 1);
-            if (got <= 0) {
+            uint8[] sbytes;
+            try {
+                sbytes = bytes_to_array (f_meta.read_range ("/#STRINGS", stroff, COMBUF_LEN - 1));
+            } catch (Error e) {
+                sbytes = new uint8[0];
+            }
+            if (sbytes.length <= 0) {
                 topic = "Untitled in index";
             } else {
-                combuf[(int) got] = 0;
+                var combuf = new uint8[sbytes.length + 1];
+                GLib.Memory.copy (combuf, sbytes, sbytes.length);
+                combuf[sbytes.length] = 0;
                 topic = to_utf8 ((string) combuf, _encoding);
             }
 
             uint32 urloff = UINT32_FROM_ARRAY (entry, 8);
-            if (chm_retrieve_object (f_urltbl, ui_urltbl, combuf, urloff, 12) != 12) {
+            uint8[] urow;
+            try {
+                var ub = f_meta.read_range ("/#URLTBL", urloff, 12);
+                if (ub.get_size () != 12) return false;
+                urow = bytes_to_array (ub);
+            } catch (Error e) {
                 return false;
             }
 
-            urloff = UINT32_FROM_ARRAY (combuf, 8);
-            got = chm_retrieve_object (f_urlstr, ui_urlstr, combuf, urloff + 8, COMBUF_LEN - 1);
-            if (got <= 0) {
+            urloff = UINT32_FROM_ARRAY (urow, 8);
+            uint8[] ubytes;
+            try {
+                ubytes = bytes_to_array (f_meta.read_range ("/#URLSTR", (uint64) urloff + 8, COMBUF_LEN - 1));
+            } catch (Error e) {
+                return false;
+            }
+            if (ubytes.length <= 0) {
                 return false;
             }
 
-            combuf[(int) got] = 0;
-            string url = (string) combuf;
+            var ucombuf = new uint8[ubytes.length + 1];
+            GLib.Memory.copy (ucombuf, ubytes, ubytes.length);
+            ucombuf[ubytes.length] = 0;
+            string url = (string) ucombuf;
             if (url.length > 0 && url[0] != '/') url = "/" + url;
 
             if (topic.length > 0 && url.length > 0 &&
@@ -1356,30 +1483,32 @@ namespace Vchm.Model {
         results = new Gee.ArrayList<SearchResult> ();
         words_seen = 0;
         words_non_ascii = 0;
-        if (_file == null) return false;
+        if (_archive == null) return false;
         if (text.length == 0) return false;
 
-        var f_main = _file;
+        var f_main = _archive;
         var mf = meta_file ();
+        if (mf == null) return false;
 
-        ChmLib.UnitInfoStruct ui_main = ChmLib.UnitInfoStruct ();
-        ChmLib.UnitInfoStruct ui_topics = ChmLib.UnitInfoStruct ();
-        ChmLib.UnitInfoStruct ui_strings = ChmLib.UnitInfoStruct ();
-        ChmLib.UnitInfoStruct ui_urltbl = ChmLib.UnitInfoStruct ();
-        ChmLib.UnitInfoStruct ui_urlstr = ChmLib.UnitInfoStruct ();
-
-        if (chm_resolve_object (f_main, "/$FIftiMain", out ui_main) != ChmLib.RESOLVE_SUCCESS ||
-            chm_resolve_object (mf, "/#TOPICS", out ui_topics) != ChmLib.RESOLVE_SUCCESS ||
-            chm_resolve_object (mf, "/#STRINGS", out ui_strings) != ChmLib.RESOLVE_SUCCESS ||
-            chm_resolve_object (mf, "/#URLTBL", out ui_urltbl) != ChmLib.RESOLVE_SUCCESS ||
-            chm_resolve_object (mf, "/#URLSTR", out ui_urlstr) != ChmLib.RESOLVE_SUCCESS) {
+        if (!f_main.contains ("/$FIftiMain") ||
+            !mf.contains ("/#TOPICS") ||
+            !mf.contains ("/#STRINGS") ||
+            !mf.contains ("/#URLTBL") ||
+            !mf.contains ("/#URLSTR")) {
             return false;
         }
+        uint64 main_len = f_main.uncompressed_size ("/$FIftiMain");
 
         const int FTS_HEADER_LEN = 0x32;
-        var header = new uint8[FTS_HEADER_LEN];
-        if (chm_retrieve_object (f_main, &ui_main, header, 0, FTS_HEADER_LEN) == 0)
+        uint8[] header;
+        try {
+            var hb = f_main.read_range ("/$FIftiMain", 0, FTS_HEADER_LEN);
+            if (hb.get_size () == 0) return false;
+            if (hb.get_size () != FTS_HEADER_LEN) return false;
+            header = bytes_to_array (hb);
+        } catch (Error e) {
             return false;
+        }
 
         var p = FtsParams () {
             doc_index_s = header[0x1E], doc_index_r = header[0x1F],
@@ -1396,14 +1525,13 @@ namespace Vchm.Model {
 
         if (node_len == 0 || node_len > MAX_UNIT_BYTES) return false;
         // B-tree nodes are 2 KiB in practice; cap tighter to avoid 256 MB
-        // worker allocations from crafted archives (M5).
+        // worker allocations from crafted archives.
         if (node_len > 64 * 1024) return false;
 
         string word = "";
-        var buffer = new uint8[node_len];
 
         node_offset = get_leaf_node_offset (text, node_offset, node_len,
-                                            tree_depth, f_main, &ui_main,
+                                            tree_depth, f_main,
                                             _encoding);
         if (node_offset == 0)
             return false;
@@ -1413,7 +1541,13 @@ namespace Vchm.Model {
 
         bool leaf_ok = false;
         do {
-            if (chm_retrieve_object (f_main, &ui_main, buffer, node_offset, (long) node_len) == 0) {
+            uint8[] buffer;
+            try {
+                var lb = f_main.read_range ("/$FIftiMain", node_offset, node_len);
+                if (lb.get_size () == 0) break;
+                if (lb.get_size () != node_len) break;
+                buffer = bytes_to_array (lb);
+            } catch (Error e) {
                 break;
             }
             leaf_ok = true;
@@ -1464,7 +1598,7 @@ namespace Vchm.Model {
                 i = (uint32) ipos;
 
                 if (wlc_count > 1000000 || wlc_size == uint64.MAX ||
-                    wlc_size > (uint64) ui_main.length ||
+                    wlc_size > main_len ||
                     wlc_size > (uint64) MAX_UNIT_BYTES)
                     continue;
 
@@ -1476,8 +1610,7 @@ namespace Vchm.Model {
                 if (whole_words) {
                     if (is_match) {
                         process_wlc (wlc_count, wlc_size, wlc_offset, p,
-                                     f_main, &ui_main, mf, &ui_topics, mf, &ui_strings,
-                                     mf, &ui_urltbl, mf, &ui_urlstr, results);
+                                     f_main, mf, results);
                         break;
                     }
                 } else {
@@ -1485,8 +1618,7 @@ namespace Vchm.Model {
                     if (wlow.has_prefix (needle)) {
                         partial = true;
                         process_wlc (wlc_count, wlc_size, wlc_offset, p,
-                                     f_main, &ui_main, mf, &ui_topics, mf, &ui_strings,
-                                     mf, &ui_urltbl, mf, &ui_urlstr, results);
+                                     f_main, mf, results);
                     }
                     // No early break here: the original only breaks on
                     // `CmpNoCase(...) < -1`, which is never true, and a
@@ -1542,7 +1674,7 @@ public string load_text (string path) {
 
             _api_mutex.lock ();
             try {
-                if (_file == null) return false;
+                if (_archive == null) return false;
 
                 if (load_binary_index (out entries)) {
                     return true;
@@ -1575,20 +1707,15 @@ public string load_text (string path) {
         // /$WWKeywordLinks/BTree, topic targets resolved via #TOPICS.
         private bool load_binary_index (out Gee.ArrayList<SearchResult> entries) {
             entries = new Gee.ArrayList<SearchResult> ();
-            if (_file == null) return false;
+            if (_archive == null) return false;
             var mf = meta_file ();
+            if (mf == null) return false;
 
-            ChmLib.UnitInfoStruct bt_ui = ChmLib.UnitInfoStruct ();
-            ChmLib.UnitInfoStruct ts_ui = ChmLib.UnitInfoStruct ();
-            ChmLib.UnitInfoStruct st_ui = ChmLib.UnitInfoStruct ();
-            ChmLib.UnitInfoStruct ut_ui = ChmLib.UnitInfoStruct ();
-            ChmLib.UnitInfoStruct us_ui = ChmLib.UnitInfoStruct ();
-
-            if (chm_resolve_object (mf, "/$WWKeywordLinks/BTree", out bt_ui) != ChmLib.RESOLVE_SUCCESS ||
-                chm_resolve_object (mf, "/#TOPICS", out ts_ui) != ChmLib.RESOLVE_SUCCESS ||
-                chm_resolve_object (mf, "/#STRINGS", out st_ui) != ChmLib.RESOLVE_SUCCESS ||
-                chm_resolve_object (mf, "/#URLTBL", out ut_ui) != ChmLib.RESOLVE_SUCCESS ||
-                chm_resolve_object (mf, "/#URLSTR", out us_ui) != ChmLib.RESOLVE_SUCCESS) {
+            if (!mf.contains ("/$WWKeywordLinks/BTree") ||
+                !mf.contains ("/#TOPICS") ||
+                !mf.contains ("/#STRINGS") ||
+                !mf.contains ("/#URLTBL") ||
+                !mf.contains ("/#URLSTR")) {
                 return false;
             }
 
@@ -1597,11 +1724,11 @@ public string load_text (string path) {
             uint8[] strings = new uint8[0];
             uint8[] urltbl = new uint8[0];
             uint8[] urlstr = new uint8[0];
-            if (!retrieve_unit (mf, bt_ui, out btree) ||
-                !retrieve_unit (mf, ts_ui, out topics) ||
-                !retrieve_unit (mf, st_ui, out strings) ||
-                !retrieve_unit (mf, ut_ui, out urltbl) ||
-                !retrieve_unit (mf, us_ui, out urlstr)) {
+            if (!read_unit (mf, "/$WWKeywordLinks/BTree", out btree) ||
+                !read_unit (mf, "/#TOPICS", out topics) ||
+                !read_unit (mf, "/#STRINGS", out strings) ||
+                !read_unit (mf, "/#URLTBL", out urltbl) ||
+                !read_unit (mf, "/#URLSTR", out urlstr)) {
                 return false;
             }
 
@@ -1675,14 +1802,18 @@ public string load_text (string path) {
             sb.append_unichar ((unichar) unit);
         }
 
-        static bool retrieve_unit (ChmLib.File* f, ChmLib.UnitInfoStruct ui, out uint8[] data) {
+        static bool read_unit (Itsf.Archive arc, string path, out uint8[] data) {
             data = new uint8[0];
-            if (ui.length == 0 || ui.length > MAX_UNIT_BYTES) return false;
-            var buf = new uint8[(int) ui.length];
-            if (chm_retrieve_object (f, &ui, buf, 0, (long) ui.length) != (long) ui.length) {
+            uint64 len = arc.uncompressed_size (path);
+            if (len == 0 || len > (uint64) MAX_UNIT_BYTES) return false;
+            GLib.Bytes b;
+            try {
+                b = arc.read (path);
+            } catch (Error e) {
                 return false;
             }
-            data = buf;
+            if (b.get_size () != len) return false;
+            data = bytes_to_array (b);
             return true;
         }
 
@@ -1735,7 +1866,7 @@ public Gee.ArrayList<string> enumerate_topic_urls (out Gee.HashMap<string, strin
     return urls;
 }
 
-// ── Full-text search (v1: scan pages; $FIftiMain port pending) ────
+// ── Full-text search ($FIftiMain fast path, brute-force fallback) ──
 
 public bool search (string query, bool whole_words, bool titles_only,
                     out Gee.ArrayList<SearchResult> results) {
@@ -1744,14 +1875,14 @@ public bool search (string query, bool whole_words, bool titles_only,
     var needle = query.down ().strip ();
     if (needle.length == 0) return false;
 
-    // Fast path under the API lock: $FIftiMain walks raw chmlib handles
+    // Fast path under the API lock: $FIftiMain walks archive bytes
     // that close() would free, and a compiled-index walk is short.
     _api_mutex.lock ();
     bool indexed;
     int fts_words_seen = 0;
     int fts_words_non_ascii = 0;
     try {
-        indexed = _file != null && fts_search (needle, whole_words, titles_only,
+        indexed = _archive != null && fts_search (needle, whole_words, titles_only,
                                                out results, out fts_words_seen,
                                                out fts_words_non_ascii);
     } finally {
@@ -1785,7 +1916,7 @@ public bool search (string query, bool whole_words, bool titles_only,
 
     _api_mutex.lock ();
     try {
-        if (_file != null) {
+        if (_archive != null) {
             urls = enumerate_topic_urls (out titles);
             foreach (var u in urls) seen.add (u);
             foreach (var p in list_content_pages ()) {
@@ -1996,21 +2127,19 @@ static int char_index_at_or_after (int[] starts, int byte_off) {
             _api_mutex.lock ();
             try {
                 cid_map.clear ();
-                if (_file == null) return;
+                if (_archive == null) return;
 
-                ChmLib.UnitInfoStruct ivb_ui = ChmLib.UnitInfoStruct ();
-                ChmLib.UnitInfoStruct strs_ui = ChmLib.UnitInfoStruct ();
+                var mf = meta_file ();
+                if (mf == null) return;
 
                 // #IVB sits beside the other internal units — companion when
                 // present, else the archive itself.
-                int rivb = chm_resolve_object (meta_file (), "/#IVB", out ivb_ui);
-                int rstr = chm_resolve_object (meta_file (), "/#STRINGS", out strs_ui);
-                if (rivb != ChmLib.RESOLVE_SUCCESS || rstr != ChmLib.RESOLVE_SUCCESS) {
+                if (!mf.contains ("/#IVB") || !mf.contains ("/#STRINGS")) {
                     return;
                 }
 
                 uint8[] ivb;
-                if (!retrieve_unit (meta_file (), ivb_ui, out ivb)) return;
+                if (!read_unit (mf, "/#IVB", out ivb)) return;
 
                 if (ivb.length < 12) return;   // 4-byte skip + at least one cid pair
 
@@ -2018,7 +2147,7 @@ static int char_index_at_or_after (int[] starts, int byte_off) {
                 if (n % 2 != 0) return;
 
                 uint8[] strings;
-                if (!retrieve_unit (meta_file (), strs_ui, out strings)) return;
+                if (!read_unit (mf, "/#STRINGS", out strings)) return;
 
                 for (size_t i = 0; i + 1 < n; i += 2) {
                     uint32 cid = UINT32_FROM_ARRAY (ivb, (int) ((i + 1) * 4));

@@ -6,9 +6,6 @@ project('vchm', ['c', 'vala'],
                        ],
 )
 
-# Optional path to a real .chm for the smoke test; empty = use fixtures.
-test_book = get_option('test_book')
-
 i18n = import('i18n')
 
 gnome = import('gnome')
@@ -28,31 +25,13 @@ gnome.post_install(
 )
 
 
-# Build chmlib as a static library
-chmlib_sources = [
-  'compat/chm_lib.c',
-  'compat/lzx.c',
-]
-
-# Vendored chmlib header. Listed
-# FIRST on the include path so every consumer — the vendored C sources
-# and all Vala-generated code — resolves chm_lib.h to our copy instead
-# of a possibly ABI-skewed system one.
-inc_compat = include_directories('compat')
-
-chmlib_lib = static_library('chmlib',
-  chmlib_sources,
-  include_directories: [inc_compat, include_directories('compat')],
-  c_args: ['-DENABLE_BUILTIN_CHMLIB'],
-)
-
+itsf_dep = subproject('itsf').get_variable('itsf_dep')
 
 # Shared library for pure logic (testable without GTK).
 # Everything in here must stay GTK-free: no widgets, no Gtk imports.
 lib_core_sources = [
   'src/elmish.vala',
   'src/model/messages.vala',
-  'src/model/chmlib.vala',
   'src/model/chmfile.vala',
   'src/model/hhcparser.vala',
   'src/model/htmlutils.vala',
@@ -76,15 +55,15 @@ lib_core = static_library('vchm-core',
   dependencies: [
     dependency('gio-2.0', version: '>= 2.76'),
     dependency('gee-0.8', version: '>= 0.20'),
+    itsf_dep,
   ],
-  c_args: ['-I@CURRENT_SOURCE_DIR@/compat'],
-  include_directories: inc_compat,
-  link_with: chmlib_lib,
+  c_args: [],
 )
 
 lib_core_dep = declare_dependency(
   link_with: lib_core,
-  include_directories: [include_directories('.'), inc_compat],
+  include_directories: [include_directories('.')],
+  dependencies: [itsf_dep],
 )
 
 
@@ -123,7 +102,6 @@ vchm = executable(
     dependency('gee-0.8', version: '>= 0.20'),
     lib_core_dep,
   ],
-  link_with: chmlib_lib,
   install: true,
 )
 
@@ -140,7 +118,6 @@ test_update = executable(
     dependency('gee-0.8', version: '>= 0.20'),
     lib_core_dep,
   ],
-  link_with: chmlib_lib,
 )
 test('test update', test_update,
   env: [
@@ -177,7 +154,7 @@ endif
 # it is hermetic.
 reopen_sh = join_paths(meson.project_source_root (), 'tools', 'test_reopen.sh')
 test('test reopen shell', find_program('bash'),
-  args: [reopen_sh, vchm, join_paths(meson.current_build_dir (), 'tests', 'basic.chm')],
+  args: [reopen_sh, vchm, join_paths(meson.current_build_dir (), 'tests', 'compressed.chm')],
   env: ['GSETTINGS_BACKEND=memory'],
   timeout: 30,
 )
