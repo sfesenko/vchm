@@ -1,0 +1,80 @@
+name: build
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      render_test:
+        description: Build and run the Xvfb render smoke test
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: meson build + test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      # master pushes run the full suite (incl. the Xvfb view-layer smoke);
+      # manual UI runs opt in via the checkbox.
+      ENABLE_RENDER_TEST: ${{ github.event_name == 'push' && 'true' || inputs.render_test || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Best-effort: reuse downloaded .debs. The dir is root-owned, so hand
+      # it to the runner user or the post-job cache save cannot write to it.
+      - name: Cache apt archives
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          sudo chown -R "$USER":"$(id -gn)" /var/cache/apt/archives
+          sudo apt-get update
+          sudo apt-get install -y \
+            meson ninja-build valac gettext python3 ccache \
+            libgtk-4-dev libwebkitgtk-6.0-dev libgee-0.8-dev \
+            desktop-file-utils appstream-util \
+            xvfb dbus-x11 imagemagick python3-pil
+
+      - name: Toolchain versions
+        run: |
+          meson --version
+          valac --version
+          pkg-config --modversion gtk4 webkitgtk-6.0 gee-0.8
+
+      # meson wraps the compiler with ccache automatically when it is in PATH.
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ github.ref }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      - name: Configure
+        run: meson setup builddir -Denable_render_test=$ENABLE_RENDER_TEST
+
+      - name: Build
+        run: meson compile -C builddir
+
+      - name: Test
+        run: meson test -C builddir --print-errorlogs
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meson-testlog
+          path: builddir/meson-logs/testlog.txt
+          if-no-files-found: ignore

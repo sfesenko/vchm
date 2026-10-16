@@ -140,11 +140,13 @@ if get_option('enable_render_test')
   # book_cp1251.chm above already provides a multi-chapter CP1251 book
   # (Ukrainian pages, image subresource, entities, relative + ../ links),
   # so no developer-local book is needed here and the test stays hermetic.
-  test('test render smoke', vchm,
+  test('test render smoke', find_program('bash'),
     args: [smoke_render, vchm] + render_fixtures,
     env: [
       'GSETTINGS_BACKEND=memory',
     ],
+    # smoke_render.sh sleeps 12s per fixture (3 fixtures) plus Xvfb startup.
+    timeout: 120,
   )
 endif
 
