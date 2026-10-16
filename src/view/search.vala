@@ -6,10 +6,23 @@ using Vchm.Model;
 
 namespace Vchm.View {
 
+    private class SearchRow : Object {
+        public string title { get; set; }
+        public string url { get; set; }
+        public int rank { get; set; }
+
+        public SearchRow (string title, string url, int rank) {
+            this.title = title;
+            this.url = url;
+            this.rank = rank;
+        }
+    }
+
     public class SearchView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
-        private TreeView tree_view;
-        private Gtk.ListStore store;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
+        private ColumnView column_view;
+        private GLib.ListStore store;
+        private SingleSelection selection;
         private Entry query_entry;
         private CheckButton whole_words_check;
         private CheckButton titles_only_check;
@@ -60,13 +73,13 @@ namespace Vchm.View {
             var options_box = new Box (Orientation.HORIZONTAL, 12);
             whole_words_check = new CheckButton ();
             whole_words_check.label = _("Whole words");
-            whole_words_check.toggled.connect (() => 
+            whole_words_check.toggled.connect (() =>
                 dispatch (new SearchOptionsChangedMessage (whole_words_check.active, titles_only_check.active)));
             options_box.append (whole_words_check);
 
             titles_only_check = new CheckButton ();
             titles_only_check.label = _("Titles only");
-            titles_only_check.toggled.connect (() => 
+            titles_only_check.toggled.connect (() =>
                 dispatch (new SearchOptionsChangedMessage (whole_words_check.active, titles_only_check.active)));
             options_box.append (titles_only_check);
 
@@ -79,65 +92,77 @@ namespace Vchm.View {
             };
             scrolled.set_policy (PolicyType.NEVER, PolicyType.AUTOMATIC);
 
-            store = new Gtk.ListStore (3, typeof(string), typeof(string), typeof(int)); // title, url, rank
-            tree_view = new TreeView () {
-                model = store,
-                headers_visible = true,
+            store = new GLib.ListStore (typeof (SearchRow));
+            selection = new SingleSelection (store) {
+                autoselect = false,
+                can_unselect = true
+            };
+            column_view = new ColumnView (selection) {
                 hexpand = true,
-                vexpand = true
+                vexpand = true,
+                show_column_separators = false,
+                show_row_separators = false
             };
 
             // Title column
-            var renderer = new CellRendererText () {
-                ellipsize = Pango.EllipsizeMode.END
+            var title_factory = new SignalListItemFactory ();
+            title_factory.setup.connect ((item) => {
+                var li = (ListItem) item;
+                var label = new Label (null) {
+                    xalign = 0,
+                    hexpand = true,
+                    ellipsize = Pango.EllipsizeMode.END
+                };
+                li.set_child (label);
+            });
+            title_factory.bind.connect ((item) => {
+                var li = (ListItem) item;
+                var label = (Label) li.get_child ();
+                var row = (SearchRow) li.get_item ();
+                label.label = row.title;
+            });
+            var title_column = new ColumnViewColumn (_("Title"), title_factory) {
+                expand = true
             };
-            var title_column = new TreeViewColumn ();
-            title_column.title = _("Title");
-            title_column.pack_start (renderer, true);
-            title_column.add_attribute (renderer, "text", 0);
-            title_column.expand = true;
-            tree_view.append_column (title_column);
+            column_view.append_column (title_column);
 
             // Rank column
-            var rank_renderer = new CellRendererText ();
-            var rank_column = new TreeViewColumn ();
-            rank_column.title = _("Rank");
-            rank_column.pack_start (rank_renderer, false);
-            rank_column.add_attribute (rank_renderer, "text", 2);
-            rank_column.fixed_width = 50;
-            tree_view.append_column (rank_column);
+            var rank_factory = new SignalListItemFactory ();
+            rank_factory.setup.connect ((item) => {
+                var li = (ListItem) item;
+                var label = new Label (null) { xalign = 1 };
+                li.set_child (label);
+            });
+            rank_factory.bind.connect ((item) => {
+                var li = (ListItem) item;
+                var label = (Label) li.get_child ();
+                var row = (SearchRow) li.get_item ();
+                label.label = row.rank.to_string ();
+            });
+            var rank_column = new ColumnViewColumn (_("Rank"), rank_factory) {
+                fixed_width = 50
+            };
+            column_view.append_column (rank_column);
 
-            tree_view.row_activated.connect ((path, column) => {
-                TreeIter iter;
-                if (store.get_iter (out iter, path)) {
-                    Value val;
-                    store.get_value (iter, 1, out val);
-                    string? url = val.get_string ();
-                    if (url != null && url != "") {
-                        dispatch (new SearchSelectionChangedMessage (url));
-                    }
+            column_view.activate.connect ((pos) => {
+                var row = (SearchRow?) store.get_item (pos);
+                if (row != null && row.url != null && row.url != "") {
+                    dispatch (new SearchSelectionChangedMessage (row.url));
                 }
             });
 
             // Loads a result as soon as it is selected (single
             // click — chmsearchpanel EVT_LIST_ITEM_SELECTED parity).
-            tree_view.cursor_changed.connect (() => {
+            selection.selection_changed.connect (() => {
                 if (syncing) return;
-                TreePath? path;
-                TreeViewColumn? col;
-                tree_view.get_cursor (out path, out col);
-                if (path == null) return;
-                TreeIter iter;
-                if (!store.get_iter (out iter, path)) return;
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? url = val.get_string ();
-                if (url != null && url != "") {
-                    dispatch (new SearchSelectionChangedMessage (url));
+                var row = (SearchRow?) selection.selected_item;
+                if (row == null) return;
+                if (row.url != null && row.url != "") {
+                    dispatch (new SearchSelectionChangedMessage (row.url));
                 }
             });
 
-            scrolled.child = tree_view;
+            scrolled.child = column_view;
             append (scrolled);
 
             // Empty-state hint (no hits / nothing searched yet).
@@ -176,7 +201,7 @@ namespace Vchm.View {
                     }
                     break;
                 }
-case AppMessageKind.SEARCH_EXECUTE: {
+                case AppMessageKind.SEARCH_EXECUTE: {
                     // Triggered by button or Enter
                     break;
                 }
@@ -201,16 +226,14 @@ case AppMessageKind.SEARCH_EXECUTE: {
         private void rebuild_results (AppModel model) {
             var s_rb = model.current_book != null ? model.current_book.search : model.placeholder.search;
             syncing = true;
-            store.clear ();
+            store.remove_all ();
             foreach (var result in s_rb.results) {
-                TreeIter iter;
-                store.append (out iter);
-                store.set (iter, 0, result.title, 1, result.url, 2, result.rank);
+                store.append (new SearchRow (result.title, result.url, result.rank));
             }
 
-            if (store.iter_n_children (null) > 0) {
-                var path = new TreePath.first ();
-                tree_view.set_cursor (path, null, false);
+            if (store.get_n_items () > 0) {
+                selection.select_item (0, true);
+                column_view.scroll_to (0, null, ListScrollFlags.NONE, null);
                 status_label.visible = false;
                 status_label.label = "";
             } else {

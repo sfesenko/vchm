@@ -13,7 +13,7 @@ using Vchm.Model;
 namespace Vchm.View {
 
     public class ViewerView : WebView {
-        private Elmish.Dispatch<AppMessage> dispatch;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
         private new WebViewContextMenu context_menu;
         private GLib.SimpleAction? open_external_action = null;
         private string? loaded_url = null;

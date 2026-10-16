@@ -7,7 +7,7 @@ using Vchm.Model;
 namespace Vchm.View {
 
     public class StatusBarView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
         private Label status_label;
         private Revealer toast_revealer;
         private Label toast_label;

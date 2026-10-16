@@ -97,7 +97,7 @@ vchm = executable(
     '--target-glib=2.76',
   ],
   dependencies: [
-    dependency('gtk4', version: '>= 4.10'),
+    dependency('gtk4', version: '>= 4.12'),
     dependency('webkitgtk-6.0', version: '>= 2.40'),
     dependency('gee-0.8', version: '>= 0.20'),
     lib_core_dep,
@@ -113,7 +113,7 @@ test_update = executable(
     '--target-glib=2.76',
   ],
   dependencies: [
-    dependency('gtk4', version: '>= 4.10'),
+    dependency('gtk4', version: '>= 4.12'),
     dependency('webkitgtk-6.0', version: '>= 2.40'),
     dependency('gee-0.8', version: '>= 0.20'),
     lib_core_dep,

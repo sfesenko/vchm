@@ -89,7 +89,8 @@ namespace Vchm.Model {
             return GLib.File.new_for_path (path).get_path () ?? path;
         }
 
-        private Elmish.Dispatch<AppMessage> parent_dispatch = AppModel.noop_dispatch;
+        // Borrowed; the ElmishProgram outlives the model.
+        private unowned Elmish.Dispatch<AppMessage> parent_dispatch = AppModel.noop_dispatch;
         public static void noop_dispatch (AppMessage msg) {
         }
 
@@ -97,7 +98,7 @@ namespace Vchm.Model {
             parent_dispatch = dispatch;
         }
 
-        public Elmish.Dispatch<AppMessage> get_parent_dispatch () {
+        public unowned Elmish.Dispatch<AppMessage> get_parent_dispatch () {
             return parent_dispatch;
         }
 

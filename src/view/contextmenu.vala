@@ -9,7 +9,7 @@ namespace Vchm.View {
 
     public class WebViewContextMenu : Object {
         private WebView web_view;
-        private Elmish.Dispatch<AppMessage> dispatch;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
 
         public WebViewContextMenu (WebView web_view, Elmish.Dispatch<AppMessage> dispatch) {
             this.web_view = web_view;

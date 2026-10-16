@@ -31,7 +31,7 @@ namespace Vchm {
         public const string ACTION_ABOUT = "about";
         public const string ACTION_PREFERENCES = "preferences";
 
-        private Elmish.Dispatch<AppMessage> dispatch;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
         private Gtk.Application app;
 
         // Main layout
@@ -720,12 +720,15 @@ private void setup_main_layout (AppModel model) {
         }
 
         private void show_preferences (AppModel model) {
-            var dialog = new Gtk.Dialog.with_buttons (
-                _("Preferences"), this, Gtk.DialogFlags.MODAL,
-                _("Close"), Gtk.ResponseType.CLOSE);
-            dialog.set_default_size (420, 200);
+            var dialog = new Gtk.Window () {
+                title = _("Preferences"),
+                transient_for = this,
+                modal = true,
+                default_width = 420,
+                default_height = 200
+            };
 
-            var content = (Gtk.Box) dialog.get_content_area ();
+            var content = new Gtk.Box (Gtk.Orientation.VERTICAL, 0);
             var vbox = new Gtk.Box (Gtk.Orientation.VERTICAL, 12) {
                 margin_top = 12, margin_bottom = 12,
                 margin_start = 12, margin_end = 12
@@ -807,10 +810,30 @@ private void setup_main_layout (AppModel model) {
 
             content.append (vbox);
 
-            dialog.response.connect ((rid) => {
-                if (rid == Gtk.ResponseType.CLOSE || rid == Gtk.ResponseType.DELETE_EVENT) {
+            var close_row = new Gtk.Box (Gtk.Orientation.HORIZONTAL, 6) {
+                halign = Align.END,
+                margin_bottom = 12, margin_end = 12
+            };
+            var close_btn = new Gtk.Button.with_label (_("Close"));
+            close_btn.clicked.connect (() => dialog.destroy ());
+            close_row.append (close_btn);
+            content.append (close_row);
+
+            dialog.child = content;
+            dialog.close_request.connect (() => {
+                dialog.destroy ();
+                return false;
+            });
+
+            // Escape-close parity with Gtk.Dialog.
+            var esc = new EventControllerKey ();
+            ((Gtk.Widget) dialog).add_controller (esc);
+            esc.key_pressed.connect ((keyval, keycode, state) => {
+                if (keyval == Gdk.Key.Escape) {
                     dialog.destroy ();
+                    return true;
                 }
+                return false;
             });
 
             dialog.present ();

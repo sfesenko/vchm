@@ -7,7 +7,7 @@ using Vchm.Model;
 namespace Vchm.View {
 
     public class ToolbarView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
 
         public ToolbarView () {
             Object (orientation: Orientation.HORIZONTAL, spacing: 6);

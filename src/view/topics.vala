@@ -6,22 +6,41 @@ using Vchm.Model;
 
 namespace Vchm.View {
 
+    private class TopicsFlatRow : Object {
+        public TopicsItem item { get; private set; }
+        public int depth { get; private set; }
+        public bool has_children { get; private set; }
+
+        public TopicsFlatRow (TopicsItem item, int depth, bool has_children) {
+            this.item = item;
+            this.depth = depth;
+            this.has_children = has_children;
+        }
+    }
+
     public class TopicsView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
-        private TreeView tree_view;
-        private TreeStore store;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
+        private ListView list_view;
+        private GLib.ListStore store;
+        private SingleSelection selection;
         private ScrolledWindow scrolled;
+        private AppModel? held_model = null;
         private TopicsItem? built_root = null;   // change-detection guard
+        // Collapsed nodes (by identity); everything else renders expanded.
+        private Gee.HashSet<TopicsItem> collapsed;
+        private double pending_scroll_restore = 0;
         // Guards against programmatic cursor moves (selection sync,
         // rebuilds) re-entering the navigate-on-select handler.
         private bool syncing = false;
 
         public TopicsView () {
             Object (orientation: Orientation.VERTICAL);
+            collapsed = new Gee.HashSet<TopicsItem> ();
         }
 
         public void build_ui (Elmish.Dispatch<AppMessage> dispatch, AppModel model) {
             this.dispatch = dispatch;
+            held_model = model;
 
             scrolled = new ScrolledWindow () {
                 hexpand = true,
@@ -29,102 +48,139 @@ namespace Vchm.View {
             };
             scrolled.set_policy (PolicyType.NEVER, PolicyType.AUTOMATIC);
 
-            store = new TreeStore (2, typeof(string), typeof(string)); // name, url
-            tree_view = new TreeView () {
-                model = store,
-                headers_visible = false,
+            store = new GLib.ListStore (typeof (TopicsFlatRow));
+            selection = new SingleSelection (store) {
+                autoselect = false,
+                can_unselect = true
+            };
+            var factory = new SignalListItemFactory ();
+            factory.setup.connect ((list_item) => {
+                var li = (ListItem) list_item;
+                var row_box = new Box (Orientation.HORIZONTAL, 2);
+                var expander = new Button () {
+                    has_frame = false,
+                    width_request = 24
+                };
+                expander.clicked.connect (() => {
+                    var r = (TopicsFlatRow?) li.get_item ();
+                    if (r != null) toggle_item (r.item);
+                });
+                var label = new Label (null) {
+                    xalign = 0,
+                    hexpand = true,
+                    ellipsize = Pango.EllipsizeMode.END
+                };
+                row_box.append (expander);
+                row_box.append (label);
+                li.set_child (row_box);
+            });
+            factory.bind.connect ((list_item) => {
+                var li = (ListItem) list_item;
+                var row_box = (Box) li.get_child ();
+                var expander = (Button) row_box.get_first_child ();
+                var label = (Label) row_box.get_last_child ();
+                var r = (TopicsFlatRow) li.get_item ();
+                row_box.margin_start = r.depth * 16;
+                label.label = r.item.name;
+                if (r.has_children) {
+                    expander.visible = true;
+                    expander.label = is_expanded (r.item) ? "▾" : "▸";
+                } else {
+                    expander.visible = false;
+                }
+            });
+            list_view = new ListView (selection, factory) {
                 hexpand = true,
                 vexpand = true
             };
 
-            var renderer = new CellRendererText () {
-                ellipsize = Pango.EllipsizeMode.END
-            };
-            var column = new TreeViewColumn ();
-            column.title = _("Topics");
-            column.pack_start (renderer, true);
-            column.add_attribute (renderer, "text", 0);
-            tree_view.append_column (column);
+            // Left/Right toggles; capture phase beats GtkListBase's move bindings.
+            var keys = new EventControllerKey ();
+            keys.set_propagation_phase (PropagationPhase.CAPTURE);
+            keys.key_pressed.connect ((keyval, keycode, state) => {
+                var r = (TopicsFlatRow?) selection.selected_item;
+                if (r == null || !r.has_children) return false;
+                if (keyval == Gdk.Key.Left && is_expanded (r.item)) {
+                    toggle_item (r.item);
+                    return true;
+                }
+                if (keyval == Gdk.Key.Right && !is_expanded (r.item)) {
+                    toggle_item (r.item);
+                    return true;
+                }
+                return false;
+            });
+            list_view.add_controller (keys);
 
-            tree_view.row_activated.connect ((path, column) => {
-                TreeIter iter;
-                if (store.get_iter (out iter, path)) {
-                    Value val;
-                    store.get_value (iter, 1, out val);
-                    string? url = val.get_string ();
-                    if (url != null && url != "") {
-                        dispatch (new TopicsSelectionChangedMessage (url));
-                    }
+            list_view.activate.connect ((pos) => {
+                var r = (TopicsFlatRow?) store.get_item (pos);
+                if (r != null && r.item.url != null && r.item.url != "") {
+                    dispatch (new TopicsSelectionChangedMessage (r.item.url));
                 }
             });
 
             // Navigates on selection (single click), not only on
             // double-click (chmtoc EVT_TREE_SEL_CHANGED parity).
-            tree_view.cursor_changed.connect (() => {
+            selection.selection_changed.connect (() => {
                 if (syncing) return;
-                TreePath? path;
-                TreeViewColumn? col;
-                tree_view.get_cursor (out path, out col);
-                if (path == null) return;
-                TreeIter iter;
-                if (!store.get_iter (out iter, path)) return;
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? url = val.get_string ();
-                if (url != null && url != "") {
-                    dispatch (new TopicsSelectionChangedMessage (url));
+                var r = (TopicsFlatRow?) selection.selected_item;
+                if (r == null) return;
+                if (r.item.url != null && r.item.url != "") {
+                    dispatch (new TopicsSelectionChangedMessage (r.item.url));
                 }
             });
 
-            tree_view.row_expanded.connect ((iter, path) => {
-                if (syncing) return;
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? url = val.get_string ();
-                if (url != null && url != "") {
-                    dispatch (new TopicsItemExpandedMessage (url));
-                }
-            });
-
-            tree_view.row_collapsed.connect ((iter, path) => {
-                if (syncing) return;
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? url = val.get_string ();
-                if (url != null && url != "") {
-                    dispatch (new TopicsItemCollapsedMessage (url));
-                }
-            });
-
-            scrolled.child = tree_view;
+            scrolled.child = list_view;
             append (scrolled);
+        }
+
+        private bool is_expanded (TopicsItem item) {
+            return !collapsed.contains (item);
+        }
+
+        private void toggle_item (TopicsItem item) {
+            var m = held_model;
+            if (m == null) return;
+            bool had_selection = selection.selected_item != null;
+            if (collapsed.contains (item)) collapsed.remove (item);
+            else collapsed.add (item);
+            rebuild_flat (m, true);
+            // Keep a visible highlight when collapse hid the selected row.
+            if (had_selection && selection.selected_item == null) {
+                syncing = true;
+                select_item_position (item, false);
+                syncing = false;
+            }
+            // Persist; URL-less group nodes are view-only.
+            if (item.url != null && item.url != "") {
+                if (collapsed.contains (item))
+                    dispatch (new TopicsItemCollapsedMessage (item.url));
+                else
+                    dispatch (new TopicsItemExpandedMessage (item.url));
+            }
         }
 
         // B+hybrid: called via AppModel.notify["current-book"] (freeze/thaw batched) instead of via TAB_ACTIVATED
         public void notify_active_changed (AppModel model) {
+            held_model = model;
             built_root = null;
             rebuild_tree (model);
             var t_sel = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
-            select_url (t_sel.selected_url);
+            select_url (model, t_sel.selected_url);
         }
 
         public void update (AppMessage msg, AppModel model) {
+            held_model = model;
             var t_up = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
             switch (msg.kind) {
-case AppMessageKind.TOPICS_SELECTION_CHANGED: {
+                case AppMessageKind.TOPICS_SELECTION_CHANGED: {
                     // Selection initiated here already moved the cursor.
                     break;
                 }
 
-                case AppMessageKind.TOPICS_ITEM_EXPANDED: {
-                    var em = (TopicsItemExpandedMessage) msg;
-                    expand_url (em.url);
-                    break;
-                }
-
+                case AppMessageKind.TOPICS_ITEM_EXPANDED:
                 case AppMessageKind.TOPICS_ITEM_COLLAPSED: {
-                    var cm = (TopicsItemCollapsedMessage) msg;
-                    collapse_url (cm.url);
+                    // Applied in toggle_item; the messages only persist.
                     break;
                 }
 
@@ -137,7 +193,7 @@ case AppMessageKind.TOPICS_SELECTION_CHANGED: {
                         built_root = t_up.root;
                         rebuild_tree (model);
                     }
-                    select_url (t_up.selected_url);
+                    select_url (model, t_up.selected_url);
                     break;
                 }
 
@@ -147,88 +203,90 @@ case AppMessageKind.TOPICS_SELECTION_CHANGED: {
         }
 
         private void rebuild_tree (AppModel model) {
+            collapsed.clear ();
+            rebuild_flat (model, false);
+        }
+
+        private void rebuild_flat (AppModel model, bool preserve_scroll) {
+            var prev_row = (TopicsFlatRow?) selection.selected_item;
+            var prev_item = prev_row != null ? prev_row.item : null;
+            double saved_scroll = 0;
+            if (preserve_scroll) {
+                var vadj = scrolled.get_vadjustment ();
+                if (vadj != null) saved_scroll = vadj.get_value ();
+            }
+
             syncing = true;
-            store.clear ();
+            store.remove_all ();
             var t_rb = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
             if (t_rb.root != null) {
-                add_items_recursive (null, t_rb.root);
+                add_visible_recursive (t_rb.root, 0);
             }
-            tree_view.expand_all ();
+            if (prev_item != null) {
+                select_item_position (prev_item, false);
+            }
+            syncing = false;
+
+            if (preserve_scroll && saved_scroll > 0) {
+                pending_scroll_restore = saved_scroll;
+                GLib.Idle.add (restore_scroll_idle);
+            }
+        }
+
+        private bool restore_scroll_idle () {
+            if (pending_scroll_restore > 0) {
+                var vadj = scrolled.get_vadjustment ();
+                if (vadj != null) vadj.set_value (pending_scroll_restore);
+                pending_scroll_restore = 0;
+            }
+            return false;
+        }
+
+        private void add_visible_recursive (TopicsItem item, int depth) {
+            bool has_kids = item.children.size > 0;
+            store.append (new TopicsFlatRow (item, depth, has_kids));
+            if (has_kids && is_expanded (item)) {
+                foreach (var child in item.children) {
+                    add_visible_recursive (child, depth + 1);
+                }
+            }
+        }
+
+        private void select_url (AppModel model, string? url) {
+            if (url == null || url.length == 0) return;
+            var t = model.current_book != null ? model.current_book.topics : model.placeholder.topics;
+            var item = t.find_item_by_url (url);
+            if (item == null) return;
+            ensure_ancestors_visible (model, item);
+            syncing = true;
+            select_item_position (item, true);
             syncing = false;
         }
 
-        private void add_items_recursive (TreeIter? parent, TopicsItem item) {
-            TreeIter iter;
-            store.append (out iter, parent);
-            store.set (iter, 0, item.name, 1, item.url);
-            foreach (var child in item.children) {
-                add_items_recursive (iter, child);
-            }
-        }
-
-        private void select_url (string? url) {
-            if (url == null || url.length == 0) return;
-            TreeIter iter;
-            if (store.get_iter_first (out iter)) {
-                TreeIter found_iter;
-                if (find_iter_by_url (iter, url, out found_iter)) {
-                    var path = store.get_path (found_iter);
-                    syncing = true;
-                    tree_view.expand_to_path (path);
-                    tree_view.set_cursor (path, null, false);
-                    syncing = false;
-                    tree_view.scroll_to_cell (path, null, true, 0.3f, 0f);
+        private void ensure_ancestors_visible (AppModel model, TopicsItem item) {
+            // Visual expand_to_path parity; persistence untouched.
+            bool changed = false;
+            var p = item.parent;
+            while (p != null) {
+                if (collapsed.contains (p)) {
+                    collapsed.remove (p);
+                    changed = true;
                 }
+                p = p.parent;
             }
+            if (changed) rebuild_flat (model, false);
         }
 
-        private bool find_iter_by_url (TreeIter iter, string url, out TreeIter result) {
-            // Initialized for the not-found path; callers only read
-            // `result` when this returns true.
-            result = iter;
-            while (true) {
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? item_url = val.get_string ();
-                if (item_url == url) {
-                    result = iter;
+        private bool select_item_position (TopicsItem item, bool scroll) {
+            for (uint i = 0; i < store.get_n_items (); i++) {
+                var r = (TopicsFlatRow) store.get_item (i);
+                if (r.item == item) {
+                    selection.select_item (i, true);
+                    if (scroll) list_view.scroll_to (i, ListScrollFlags.SELECT, null);
                     return true;
                 }
-                
-                // Check children
-                TreeIter child_iter;
-                if (store.iter_children (out child_iter, iter)) {
-                    if (find_iter_by_url (child_iter, url, out result)) return true;
-                }
-                
-                if (!store.iter_next (ref iter)) {
-                    return false;
-                }
             }
-        }
-
-        private void expand_url (string? url) {
-            if (url == null) return;
-            TreeIter iter;
-            if (store.get_iter_first (out iter)) {
-                TreeIter found_iter;
-                if (find_iter_by_url (iter, url, out found_iter)) {
-                    var path = store.get_path (found_iter);
-                    tree_view.expand_row (path, false);
-                }
-            }
-        }
-
-        private void collapse_url (string? url) {
-            if (url == null) return;
-            TreeIter iter;
-            if (store.get_iter_first (out iter)) {
-                TreeIter found_iter;
-                if (find_iter_by_url (iter, url, out found_iter)) {
-                    var path = store.get_path (found_iter);
-                    tree_view.collapse_row (path);
-                }
-            }
+            return false;
         }
     }
 }

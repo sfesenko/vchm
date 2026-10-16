@@ -6,10 +6,21 @@ using Vchm.Model;
 
 namespace Vchm.View {
 
+    private class IndexRow : Object {
+        public string name { get; set; }
+        public string url { get; set; }
+
+        public IndexRow (string name, string url) {
+            this.name = name;
+            this.url = url;
+        }
+    }
+
     public class IndexView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
-        private TreeView tree_view;
-        private Gtk.ListStore store;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
+        private ListView list_view;
+        private GLib.ListStore store;
+        private SingleSelection selection;
         private Entry filter_entry;
         private ScrolledWindow scrolled;
         private Label status_label;
@@ -44,54 +55,51 @@ namespace Vchm.View {
             };
             scrolled.set_policy (PolicyType.NEVER, PolicyType.AUTOMATIC);
 
-            store = new Gtk.ListStore (2, typeof(string), typeof(string)); // name, url
-            tree_view = new TreeView () {
-                model = store,
-                headers_visible = false,
+            store = new GLib.ListStore (typeof (IndexRow));
+            selection = new SingleSelection (store) {
+                autoselect = false,
+                can_unselect = true
+            };
+            var factory = new SignalListItemFactory ();
+            factory.setup.connect ((item) => {
+                var li = (ListItem) item;
+                var label = new Label (null) {
+                    xalign = 0,
+                    hexpand = true,
+                    ellipsize = Pango.EllipsizeMode.END
+                };
+                li.set_child (label);
+            });
+            factory.bind.connect ((item) => {
+                var li = (ListItem) item;
+                var label = (Label) li.get_child ();
+                var row = (IndexRow) li.get_item ();
+                label.label = row.name;
+            });
+            list_view = new ListView (selection, factory) {
                 hexpand = true,
                 vexpand = true
             };
 
-            var renderer = new CellRendererText () {
-                ellipsize = Pango.EllipsizeMode.END
-            };
-            var column = new TreeViewColumn ();
-            column.title = _("Index");
-            column.pack_start (renderer, true);
-            column.add_attribute (renderer, "text", 0);
-            tree_view.append_column (column);
-
-            tree_view.row_activated.connect ((path, column) => {
-                TreeIter iter;
-                if (store.get_iter (out iter, path)) {
-                    Value val;
-                    store.get_value (iter, 1, out val);
-                    string? url = val.get_string ();
-                    if (url != null && url != "") {
-                        dispatch (new IndexSelectionChangedMessage (url));
-                    }
+            list_view.activate.connect ((pos) => {
+                var row = (IndexRow?) store.get_item (pos);
+                if (row != null && row.url != null && row.url != "") {
+                    dispatch (new IndexSelectionChangedMessage (row.url));
                 }
             });
 
             // Navigates when an index entry is selected (single
             // click — chmindexpanel EVT_LIST_ITEM_SELECTED parity).
-            tree_view.cursor_changed.connect (() => {
+            selection.selection_changed.connect (() => {
                 if (syncing) return;
-                TreePath? path;
-                TreeViewColumn? col;
-                tree_view.get_cursor (out path, out col);
-                if (path == null) return;
-                TreeIter iter;
-                if (!store.get_iter (out iter, path)) return;
-                Value val;
-                store.get_value (iter, 1, out val);
-                string? url = val.get_string ();
-                if (url != null && url != "") {
-                    dispatch (new IndexSelectionChangedMessage (url));
+                var row = (IndexRow?) selection.selected_item;
+                if (row == null) return;
+                if (row.url != null && row.url != "") {
+                    dispatch (new IndexSelectionChangedMessage (row.url));
                 }
             });
 
-            scrolled.child = tree_view;
+            scrolled.child = list_view;
             append (scrolled);
 
             // Empty-state hint (books without a keyword index).
@@ -151,13 +159,6 @@ namespace Vchm.View {
         }
 
         private void rebuild_list (AppModel model) {
-            store.clear ();
-            var idx_rb = model.current_book != null ? model.current_book.index : model.placeholder.index;
-            foreach (var entry in idx_rb.entries) {
-                TreeIter iter;
-                store.append (out iter);
-                store.set (iter, 0, entry.name, 1, entry.url);
-            }
             apply_filter (model);
         }
 
@@ -178,16 +179,14 @@ namespace Vchm.View {
             // Programmatic repopulation + cursor set must not look like
             // a user selection.
             syncing = true;
-            store.clear ();
+            store.remove_all ();
             foreach (var entry in idx_af.filtered_entries ()) {
-                TreeIter iter;
-                store.append (out iter);
-                store.set (iter, 0, entry.name, 1, entry.url);
+                store.append (new IndexRow (entry.name, entry.url));
             }
 
-            if (store.iter_n_children (null) > 0) {
-                var path = new TreePath.first ();
-                tree_view.set_cursor (path, null, false);
+            if (store.get_n_items () > 0) {
+                selection.select_item (0, true);
+                list_view.scroll_to (0, ListScrollFlags.NONE, null);
             }
             syncing = false;
         }

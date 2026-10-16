@@ -9,8 +9,9 @@ namespace Vchm.View {
     // Bookmarks side panel: combo of saved pages for the current book
     // plus Add/Remove buttons.
     public class BookmarksView : Box {
-        private Elmish.Dispatch<AppMessage> dispatch;
-        private ComboBoxText combo;
+        private unowned Elmish.Dispatch<AppMessage> dispatch;
+        private DropDown combo;
+        private StringList combo_items;
         private AppModel model;
         private bool populating = false;
         private string populated_for = "";
@@ -27,14 +28,29 @@ namespace Vchm.View {
             dispatch = d;
             model = m;
 
-            combo = new ComboBoxText ();
-            combo.hexpand = true;
-            combo.changed.connect (() => {
+            combo_items = new StringList (null);
+            combo = new DropDown (combo_items, null) {
+                hexpand = true
+            };
+            var factory = new SignalListItemFactory ();
+            factory.setup.connect ((item) => {
+                var li = (ListItem) item;
+                li.set_child (new Label (null) { xalign = 0 });
+            });
+            factory.bind.connect ((item) => {
+                var li = (ListItem) item;
+                var label = (Label) li.get_child ();
+                var str_obj = (StringObject) li.get_item ();
+                label.label = str_obj.string;
+            });
+            combo.factory = factory;
+            combo.list_factory = factory;
+            combo.notify["selected"].connect (() => {
                 if (populating) return;
-                int idx = combo.active;
+                uint idx = combo.selected;
                 var list = current_list ();
-                if (idx >= 0 && list != null && idx < list.size)
-                    dispatch (new BookmarkJumpMessage (list[idx].url));
+                if (list != null && idx != Gtk.INVALID_LIST_POSITION && (int) idx < list.size)
+                    dispatch (new BookmarkJumpMessage (list[(int) idx].url));
             });
             append (combo);
 
@@ -49,44 +65,65 @@ namespace Vchm.View {
 
             var remove_btn = new Button.with_label (_("Remove"));
             remove_btn.clicked.connect (() => {
-                int idx = combo.active;
+                uint idx = combo.selected;
                 var list = current_list ();
-                if (idx >= 0 && list != null && idx < list.size)
-                    dispatch (new BookmarkRemoveMessage (list[idx].title, list[idx].url));
+                if (list != null && idx != Gtk.INVALID_LIST_POSITION && (int) idx < list.size)
+                    dispatch (new BookmarkRemoveMessage (list[(int) idx].title, list[(int) idx].url));
             });
             btns.append (remove_btn);
 
             var rename_btn = new Button.with_label (_("Rename"));
             rename_btn.clicked.connect (() => {
-                int idx = combo.active;
+                uint idx = combo.selected;
                 var list = current_list ();
-                if (idx < 0 || list == null || idx >= list.size) return;
-                var bm = list[idx];
-                var dialog = new Dialog.with_buttons (_("Rename Bookmark"), (Window) get_root (),
-                    DialogFlags.MODAL, _("_Cancel"), ResponseType.CANCEL, _("_Rename"), ResponseType.ACCEPT);
-                dialog.set_default_size (350, 100);
-                var content = dialog.get_content_area ();
+                if (list == null || idx == Gtk.INVALID_LIST_POSITION || (int) idx >= list.size) return;
+                var bm = list[(int) idx];
+                var dialog = new Gtk.Window () {
+                    title = _("Rename Bookmark"),
+                    transient_for = (Window) get_root (),
+                    modal = true,
+                    default_width = 350,
+                    default_height = 100
+                };
                 var box = new Box (Orientation.VERTICAL, 6) {
                     margin_top = 12, margin_bottom = 12, margin_start = 12, margin_end = 12
                 };
                 var label = new Label (_("New title:"));
                 label.halign = Align.START;
                 var entry = new Entry () { text = bm.title, hexpand = true };
-                entry.activates_default = true;
-                dialog.set_default_response (ResponseType.ACCEPT);
                 box.append (label);
                 box.append (entry);
-                content.append (box);
-                dialog.present ();
-                entry.grab_focus ();
-                dialog.response.connect ((resp) => {
-                    if (resp == ResponseType.ACCEPT) {
-                        var nt = entry.text.strip ();
-                        if (nt.length > 0 && nt != bm.title)
-                            dispatch (new BookmarkRenameMessage (bm.url, nt));
-                    }
+                var btn_row = new Box (Orientation.HORIZONTAL, 6) {
+                    halign = Align.END
+                };
+                var cancel_btn = new Button.with_label (_("_Cancel")) { use_underline = true };
+                cancel_btn.clicked.connect (() => dialog.destroy ());
+                var rename_action = new Button.with_label (_("_Rename")) { use_underline = true };
+                rename_action.add_css_class ("suggested-action");
+                rename_action.clicked.connect (() => {
+                    var nt = entry.text.strip ();
+                    if (nt.length > 0 && nt != bm.title)
+                        dispatch (new BookmarkRenameMessage (bm.url, nt));
                     dialog.destroy ();
                 });
+                btn_row.append (cancel_btn);
+                btn_row.append (rename_action);
+                box.append (btn_row);
+                dialog.child = box;
+                dialog.default_widget = rename_action;
+                entry.activates_default = true;
+                // Escape-close parity with Gtk.Dialog.
+                var esc = new EventControllerKey ();
+                ((Gtk.Widget) dialog).add_controller (esc);
+                esc.key_pressed.connect ((keyval, keycode, state) => {
+                    if (keyval == Gdk.Key.Escape) {
+                        dialog.destroy ();
+                        return true;
+                    }
+                    return false;
+                });
+                dialog.present ();
+                entry.grab_focus ();
             });
             btns.append (rename_btn);
             append (btns);
@@ -122,18 +159,18 @@ namespace Vchm.View {
                     }
                     break;
                 }
-default:
+                default:
                     break;
             }
         }
 
         private void repopulate () {
             populating = true;
-            combo.remove_all ();
+            combo_items.splice (0, combo_items.get_n_items (), null);
             var list = current_list ();
             if (list != null)
-                foreach (var b in list) combo.append_text (b.title);
-            combo.active = list != null && list.size > 0 ? 0 : -1;
+                foreach (var b in list) combo_items.append (b.title);
+            combo.selected = list != null && list.size > 0 ? 0 : Gtk.INVALID_LIST_POSITION;
             populating = false;
         }
     }
