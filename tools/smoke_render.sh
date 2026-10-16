@@ -39,14 +39,16 @@ for fixture in "$@"; do
         continue
     fi
     out_png="$(mktemp /tmp/vchm_render.XXXXXX.png)"
+    vchm_log="$(mktemp /tmp/vchm_render_log.XXXXXX.txt)"
     # vchm is a Gtk.Application: without a session bus it exits immediately,
     # so run it under dbus-launch + xvfb-run, wait for the page to settle,
-    # screenshot the window, then tear down.
+    # screenshot the window, then tear down. Keep vchm output in a log so
+    # a startup crash is diagnosable from the testlog instead of silent.
     rc=0
     timeout 40 xvfb-run -a -s "-screen 0 1280x1024x24" \
-        env GSETTINGS_BACKEND=memory sh -u -c '
-            eval "$(dbus-launch --sh-syntax)"
-            GDK_BACKEND=x11 GSETTINGS_BACKEND=memory "$1" "$2" >/dev/null 2>&1 &
+        env GSETTINGS_BACKEND=memory bash -u -c '
+            eval "$(dbus-launch --sh-syntax --exit-with-session)"
+            GDK_BACKEND=x11 GSETTINGS_BACKEND=memory "$1" "$2" >"$3" 2>&1 &
             vpid=$!
             sleep 12
             if kill -0 "$vpid" 2>/dev/null; then
@@ -56,15 +58,20 @@ for fixture in "$@"; do
                 kill "$vpid" 2>/dev/null || true
                 wait "$vpid" 2>/dev/null || true
             else
+                wait "$vpid" 2>/dev/null || true
                 exit 124
             fi
-        ' sh "$VCHM" "$fixture" || rc=$?
+        ' bash "$VCHM" "$fixture" "$vchm_log" || rc=$?
     if [ "$rc" -eq 124 ]; then
         echo "FAIL: vchm exited before the screenshot (no session bus?)"
+        echo "--- vchm log ($fixture) ---"
+        tail -50 "$vchm_log" || true
+        echo "--- end vchm log ---"
         failures=$((failures + 1))
-        rm -f "$out_png"
+        rm -f "$out_png" "$vchm_log"
         continue
     fi
+    rm -f "$vchm_log"
     if [ ! -s "$out_png" ]; then
         echo "FAIL: no screenshot produced"
         failures=$((failures + 1))
