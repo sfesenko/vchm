@@ -76,9 +76,6 @@ private void expect_open_throws (string path) {
             Itsf.Archive.open.end (r).close ();
         } catch (Itsf.Error e) {
             threw = true;
-        } catch (Error e) {
-            Test.message ("wrong error type: %s", e.message);
-            Test.fail ();
         }
         loop.quit ();
     });
@@ -134,9 +131,6 @@ private void expect_invalid_index (string name) {
                 Test.message ("%s threw %s, expected INVALID_INDEX", name, e.message);
                 Test.fail ();
             }
-        } catch (Error e) {
-            Test.message ("%s threw non-Itsf error: %s", name, e.message);
-            Test.fail ();
         }
         loop.quit ();
     });

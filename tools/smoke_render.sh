@@ -46,8 +46,12 @@ for fixture in "$@"; do
     # a startup crash is diagnosable from the testlog instead of silent.
     rc=0
     timeout 40 xvfb-run -a -s "-screen 0 1280x1024x24" \
-        env GSETTINGS_BACKEND=memory bash -u -c '
+        env GSETTINGS_BACKEND=memory WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 bash -u -c '
             eval "$(dbus-launch --sh-syntax --exit-with-session)"
+            # WebKit's bubblewrap sandbox cannot run on a locked-down CI
+            # box (xdg-dbus-proxy exits 1 and aborts the app); disable it
+            # for the smoke only — the installed app keeps the sandbox.
+            export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
             GDK_BACKEND=x11 GSETTINGS_BACKEND=memory "$1" "$2" >"$3" 2>&1 &
             vpid=$!
             sleep 12

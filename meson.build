@@ -144,6 +144,8 @@ if get_option('enable_render_test')
     args: [smoke_render, vchm] + render_fixtures,
     env: [
       'GSETTINGS_BACKEND=memory',
+      # WebKit's bubblewrap sandbox cannot run on a locked-down CI box.
+      'WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1',
     ],
     # smoke_render.sh sleeps 12s per fixture (3 fixtures) plus Xvfb startup.
     timeout: 120,
@@ -157,7 +159,8 @@ endif
 reopen_sh = join_paths(meson.project_source_root (), 'tools', 'test_reopen.sh')
 test('test reopen shell', find_program('bash'),
   args: [reopen_sh, vchm, join_paths(meson.current_build_dir (), 'tests', 'compressed.chm')],
-  env: ['GSETTINGS_BACKEND=memory'],
+  env: ['GSETTINGS_BACKEND=memory',
+        'WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1'],
   timeout: 30,
 )
 

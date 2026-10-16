@@ -43,6 +43,10 @@ fi
 
 export GDK_BACKEND=x11
 export GSETTINGS_BACKEND=memory
+# WebKit's bubblewrap sandbox cannot run on a locked-down CI box
+# (xdg-dbus-proxy exits 1 and aborts the app); disable it for the
+# test only — the installed app keeps the sandbox.
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 export GSETTINGS_SCHEMA_DIR="$(dirname "$VCHM")/data"
 if [ ! -d "$GSETTINGS_SCHEMA_DIR" ]; then
   GSETTINGS_SCHEMA_DIR="$(dirname "$(dirname "$VCHM")")/builddir/data"

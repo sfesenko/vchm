@@ -23,9 +23,6 @@ void test_registry_thread_safety () {
     // Test that CHMFile registry can handle concurrent register/unregister
     // without race. This is a regression for the open-close-open blank
     // which could be caused by a race in s_registry.
-    var chm1 = new CHMFile ();
-    // We can't easily load a real file without a fixture, but we can test
-    // the registry directly via the public by_path after manual register.
     // Since register_self is private, we test via the load/close cycle
     // with a real fixture.
 

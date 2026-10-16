@@ -108,7 +108,7 @@ namespace Elmish {
             dispose ();
         }
 
-        public void dispose () {
+        public new void dispose () {
             disposed = true;
             if (view_update_source_id != 0) {
                 GLib.Source.remove (view_update_source_id);

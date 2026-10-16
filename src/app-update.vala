@@ -59,7 +59,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             // Monotonic bump — never goes backwards. Incoming gen is ignored (default 0 from callers that don't pre-bump).
             model.open_generation++;
             uint my_gen = model.open_generation;
-            string my_canon = canon;
             string my_path = path;
             // Close current book on main thread (save state, free CHM handle)
             // set_active(null) internally closes chm_file if non-null — do NOT call close() separately
@@ -71,8 +70,8 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             var open_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                try {
-                    new GLib.Thread<void*> ("vchm-open", () => {
+                // GLib.Thread creation does not throw; no try/catch needed.
+                new GLib.Thread<void*> ("vchm-open", () => {
                         // Each book owns its context (archive + panels).
                         var ctx = new BookContext ();
                         if (ctx.chm_file.load (my_path)) {
@@ -93,9 +92,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                         }
                         return null;
                     });
-                } catch (GLib.Error e) {
-                    open_parent (new OpenFileFailedMessage (my_path, e.message, my_gen));
-                }
             });
             break;
         }
@@ -194,7 +190,7 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
             var nav_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                try {
+                // GLib.Thread creation does not throw; no try/catch needed.
                 new GLib.Thread<void*> ("vchm-nav", () => {
                 string target = normalize_chm_target (snap_url);
 
@@ -248,9 +244,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
                 nav_parent (new NavigateDoneMessage (target, snap_title, snap_url, snap_gen));
                 return null;
                 });
-                } catch (GLib.Error e) {
-                    nav_parent (new NavigateFailedMessage (snap_url, e.message));
-                }
             });
             break;
         }
@@ -525,16 +518,13 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
 
                 var search_parent = model.get_parent_dispatch ();
                 cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                    try {
-                        new GLib.Thread<void*> ("vchm-search", () => {
-                            Gee.ArrayList<SearchResult> res;
-                            snap_file.search (q, ww, to, out res);
-                            search_parent (new SearchDoneMessage (res, snap_gen));
-                            return null;
-                        });
-                    } catch (GLib.Error e) {
-                        search_parent (new SearchDoneMessage (new Gee.ArrayList<SearchResult> (), snap_gen));
-                    }
+                    // GLib.Thread creation does not throw; no try/catch needed.
+                    new GLib.Thread<void*> ("vchm-search", () => {
+                        Gee.ArrayList<SearchResult> res;
+                        snap_file.search (q, ww, to, out res);
+                        search_parent (new SearchDoneMessage (res, snap_gen));
+                        return null;
+                    });
                 });
             }
             break;
@@ -717,24 +707,20 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
             enc_ctx.chm_file.override_encoding (em.encoding);
 
             var snap_file = enc_ctx.chm_file;
-            var snap_url = target;
             uint snap_gen = model.open_generation;
             string snap_title = enc_ctx.chm_file.title ();
 
             var rebuild_parent = model.get_parent_dispatch ();
             cmd = new Elmish.Cmd<AppMessage> ((dispatch) => {
-                try {
-                    new GLib.Thread<void*> ("vchm-rebuild", () => {
-                        var topics = new TopicsModel ();
-                        var index = new IndexModel ();
-                        topics.build_from_chm (snap_file);
-                        index.build_from_chm (snap_file);
-                        rebuild_parent (new PanelsRebuiltMessage (topics, index, snap_gen));
-                        return null;
-                    });
-                } catch (GLib.Error e) {
-                    rebuild_parent (new PanelsRebuiltMessage (new TopicsModel (), new IndexModel (), snap_gen));
-                }
+                // GLib.Thread creation does not throw; no try/catch needed.
+                new GLib.Thread<void*> ("vchm-rebuild", () => {
+                    var topics = new TopicsModel ();
+                    var index = new IndexModel ();
+                    topics.build_from_chm (snap_file);
+                    index.build_from_chm (snap_file);
+                    rebuild_parent (new PanelsRebuiltMessage (topics, index, snap_gen));
+                    return null;
+                });
             });
 
             model.get_parent_dispatch () (new NavigateMessage (target, snap_title, snap_gen));
@@ -791,7 +777,6 @@ public Elmish.Cmd<AppMessage>? updateModel (AppMessage msg, AppModel model) {
         }
 
         case AppMessageKind.SHOW_TOAST: {
-            var toast_msg = (ShowToastMessage) msg;
             // View handles toast display
             break;
         }

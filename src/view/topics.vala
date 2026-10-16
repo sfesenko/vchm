@@ -183,6 +183,9 @@ case AppMessageKind.TOPICS_SELECTION_CHANGED: {
         }
 
         private bool find_iter_by_url (TreeIter iter, string url, out TreeIter result) {
+            // Initialized for the not-found path; callers only read
+            // `result` when this returns true.
+            result = iter;
             while (true) {
                 Value val;
                 store.get_value (iter, 1, out val);

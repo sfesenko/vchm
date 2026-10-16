@@ -64,8 +64,9 @@ namespace Vchm.Model {
                 return;
             }
             
-            try {
-                window_width = _settings.get_int ("window-width");
+            // GSettings getters do not throw (schema ships defaults),
+            // so no try/catch is needed here.
+            window_width = _settings.get_int ("window-width");
                 window_height = _settings.get_int ("window-height");
                 window_maximized = _settings.get_boolean ("window-maximized");
                 sash_position = _settings.get_int ("sash-position");
@@ -80,16 +81,10 @@ namespace Vchm.Model {
                 recent_files = _settings.get_strv ("recent-files");
             bookmark_rows = _settings.get_strv ("bookmarks");
                 per_book_rows = _settings.get_strv ("per-book-rows");
-                // TTL keys added with 180d default; missing on old installs → use 180
-                per_book_expire_days = 180;
-                bookmarks_expire_days = 180;
-                try { per_book_expire_days = _settings.get_int ("per-book-expire-days"); } catch (Error e) {}
-                try { bookmarks_expire_days = _settings.get_int ("bookmarks-expire-days"); } catch (Error e) {}
+                // TTL keys ship a 180d schema default; direct read is enough.
+                per_book_expire_days = _settings.get_int ("per-book-expire-days");
+                bookmarks_expire_days = _settings.get_int ("bookmarks-expire-days");
                 last_opened_dir = _settings.get_string ("last-opened-dir");
-            } catch (GLib.Error e) {
-                stderr.printf ("Warning: Failed to load settings: %s\n", e.message);
-                apply_defaults ();
-            }
         }
 
         private void apply_defaults () {
@@ -137,8 +132,8 @@ namespace Vchm.Model {
         public void save () {
             if (!_schema_available) return;
             
-            try {
-                _settings.set_int ("window-width", window_width);
+            // GSettings setters do not throw; no try/catch needed.
+            _settings.set_int ("window-width", window_width);
                 _settings.set_int ("window-height", window_height);
                 _settings.set_boolean ("window-maximized", window_maximized);
                 _settings.set_int ("sash-position", sash_position);
@@ -156,9 +151,6 @@ namespace Vchm.Model {
             _settings.set_strv ("bookmarks", bookmark_rows);
                 _settings.set_strv ("per-book-rows", per_book_rows);
                 _settings.set_string ("last-opened-dir", last_opened_dir);
-            } catch (GLib.Error e) {
-                stderr.printf ("Warning: Failed to save settings: %s\n", e.message);
-            }
         }
 
         public void add_recent_file (string filepath) {

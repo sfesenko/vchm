@@ -684,10 +684,6 @@ namespace Vchm.Model {
             }
         }
 
-        private bool _encoding_is_utf8 () {
-            return _encoding.has_prefix ("UTF");
-        }
-
         // Find the first charset=<name> declaration in an HTML head.
         private static string? sniff_meta_charset (string raw) {
             // ASCII-only lowering: offsets computed here index BOTH copies,
@@ -1579,7 +1575,6 @@ namespace Vchm.Model {
                 i += 2 + word_len;
 
                 uint8 title_flag = buffer[i - 1];
-                int encsz = 0;
 
                 int ipos = (int) i;
                 uint64 wlc_count = be_encint_at (buffer, ref ipos);

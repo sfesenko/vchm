@@ -174,7 +174,6 @@ namespace Vchm.View {
 
         private void apply_filter (AppModel model) {
             var idx_af = model.current_book != null ? model.current_book.index : model.placeholder.index;
-            var filter = idx_af.filter_text.down ();
             update_status (model);
             // Programmatic repopulation + cursor set must not look like
             // a user selection.

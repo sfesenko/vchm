@@ -14,7 +14,7 @@ namespace Vchm.View {
 
     public class ViewerView : WebView {
         private Elmish.Dispatch<AppMessage> dispatch;
-        private WebViewContextMenu context_menu;
+        private new WebViewContextMenu context_menu;
         private GLib.SimpleAction? open_external_action = null;
         private string? loaded_url = null;
         private string? loaded_book = null;
@@ -309,7 +309,7 @@ namespace Vchm.View {
             loaded_url = null;
             loaded_book = null;
             pending_restore_y = 0;
-            try { stop_loading (); } catch {}
+            stop_loading ();
         }
 
         public void reset_to_blank () {
