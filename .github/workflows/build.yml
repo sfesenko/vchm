@@ -27,26 +27,24 @@ jobs:
       # manual UI runs opt in via the checkbox.
       ENABLE_RENDER_TEST: ${{ github.event_name == 'push' && 'true' || inputs.render_test || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Best-effort: reuse downloaded .debs. The dir is root-owned, so hand
-      # it to the runner user or the post-job cache save cannot write to it.
-      - name: Cache apt archives
-        uses: actions/cache@v4
+      # Runner-owned .deb store; apt skips downloading seeded archives.
+      - name: Cache apt packages
+        uses: actions/cache@v6
         with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: apt-${{ runner.os }}-
+          path: ~/apt-debs
+          key: apt-debs-24.04-${{ hashFiles('.github/apt-packages.txt') }}
 
       - name: Install dependencies
         run: |
-          sudo chown -R "$USER":"$(id -gn)" /var/cache/apt/archives
+          echo force-unsafe-io | sudo tee /etc/dpkg/dpkg.cfg.d/ci-speedup
+          mkdir -p ~/apt-debs
+          sudo cp ~/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
           sudo apt-get update
-          sudo apt-get install -y \
-            meson ninja-build valac gettext python3 ccache \
-            libgtk-4-dev libwebkitgtk-6.0-dev libgee-0.8-dev \
-            desktop-file-utils appstream-util \
-            xvfb dbus-x11 imagemagick python3-pil
+          sudo apt-get install -y $(cat .github/apt-packages.txt)
+          sudo cp /var/cache/apt/archives/*.deb ~/apt-debs/ 2>/dev/null || true
+          sudo chown -R "$USER":"$(id -gn)" ~/apt-debs
 
       - name: Toolchain versions
         run: |
@@ -56,7 +54,7 @@ jobs:
 
       # meson wraps the compiler with ccache automatically when it is in PATH.
       - name: Cache ccache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-${{ runner.os }}-${{ github.ref }}
@@ -73,7 +71,7 @@ jobs:
 
       - name: Upload test log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: meson-testlog
           path: builddir/meson-logs/testlog.txt

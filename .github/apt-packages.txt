@@ -1,0 +1,4 @@
+meson ninja-build valac gettext python3 ccache
+libgtk-4-dev libwebkitgtk-6.0-dev libgee-0.8-dev
+desktop-file-utils appstream-util
+xvfb dbus-x11 imagemagick python3-pil
