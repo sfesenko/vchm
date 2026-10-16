@@ -48,7 +48,7 @@ for fixture in "$@"; do
     timeout 40 xvfb-run -a -s "-screen 0 1280x1024x24" \
         env GSETTINGS_BACKEND=memory WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 bash -u -c '
             eval "$(dbus-launch --sh-syntax --exit-with-session)"
-            # WebKit's bubblewrap sandbox cannot run on a locked-down CI
+            # The WebKit bubblewrap sandbox cannot run on a locked-down CI
             # box (xdg-dbus-proxy exits 1 and aborts the app); disable it
             # for the smoke only — the installed app keeps the sandbox.
             export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
